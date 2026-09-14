@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pocket Nexus Web Installer</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b0d10; color: #f5f7fa; }
+    main { width: min(680px, calc(100% - 32px)); background: #151920; border: 1px solid #2c333d; border-radius: 20px; padding: 28px; box-sizing: border-box; }
+    h1 { margin: 0 0 8px; font-size: 30px; }
+    .sub { color: #aeb8c5; margin: 0 0 26px; }
+    .card { background: #0f1318; border: 1px solid #29313b; border-radius: 14px; padding: 18px; margin: 18px 0; }
+    ol { line-height: 1.8; padding-left: 24px; }
+    code { background: #232a33; padding: 2px 6px; border-radius: 6px; }
+    esp-web-install-button { --esp-tools-button-color: #35d0ba; --esp-tools-button-text-color: #07110f; --esp-tools-button-border-radius: 12px; }
+    button[slot="activate"] { border: 0; border-radius: 12px; padding: 14px 22px; font-size: 17px; font-weight: 700; background: #35d0ba; color: #07110f; cursor: pointer; }
+    .note { color: #aeb8c5; font-size: 14px; line-height: 1.6; }
+    a { color: #65d9ff; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Pocket Nexus</h1>
+  <p class="sub">M5Stack StickS3 · 浏览器一键烧录</p>
+
+  <div class="card">
+    <ol>
+      <li>使用 USB-C 数据线把 StickS3 接到电脑。</li>
+      <li>长按侧面 Reset 约 2 秒；看到内部绿色 LED 闪烁后松开，进入下载模式。</li>
+      <li>使用桌面版 Chrome 或 Edge 打开本页。</li>
+      <li>点击下面的按钮，选择 StickS3 的串口，然后确认安装。</li>
+    </ol>
+  </div>
+
+  <esp-web-install-button manifest="manifest.json">
+    <button slot="activate">Connect & Install Pocket Nexus</button>
+    <span slot="unsupported">当前浏览器不支持 Web Serial。请使用桌面版 Chrome 或 Edge。</span>
+    <span slot="not-allowed">浏览器阻止了串口访问，请确认当前页面通过 HTTPS 打开。</span>
+  </esp-web-install-button>
+
+  <p class="note">安装会写入 Pocket Nexus 固件。首次启动如果尚未保存 Wi-Fi，后续版本会由设备自身提供配置入口，无需把家庭 Wi-Fi 密码提交到 GitHub。</p>
+  <p class="note"><a href="https://github.com/XiminHu66/Pocket_Nexus">Source / Pocket_Nexus</a></p>
+</main>
+</body>
+</html>
