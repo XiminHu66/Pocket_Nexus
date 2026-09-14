@@ -1,4 +1,4 @@
-name: PlatformIO Build
+name: Build + Web Flasher
 
 on:
   push:
@@ -6,6 +6,12 @@ on:
       - main
       - 'dev/**'
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -24,3 +30,48 @@ jobs:
 
       - name: Build StickS3 firmware
         run: pio run -e m5stack-sticks3
+
+      - name: Create browser-flashable image
+        run: |
+          mkdir -p dist
+          python ~/.platformio/packages/tool-esptoolpy/esptool.py \
+            --chip esp32s3 merge_bin \
+            -o dist/pocket-nexus.bin \
+            --flash_mode dio \
+            --flash_freq 80m \
+            --flash_size 8MB \
+            0x0000 .pio/build/m5stack-sticks3/bootloader.bin \
+            0x8000 .pio/build/m5stack-sticks3/partitions.bin \
+            0xe000 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin \
+            0x10000 .pio/build/m5stack-sticks3/firmware.bin
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pocket-nexus-firmware
+          path: dist/pocket-nexus.bin
+
+      - name: Prepare web installer
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          mkdir -p site/firmware
+          cp -R web/. site/
+          cp dist/pocket-nexus.bin site/firmware/pocket-nexus.bin
+
+      - name: Upload GitHub Pages artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
