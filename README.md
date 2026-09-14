@@ -30,15 +30,17 @@ When upgrading, keep device data if prompted so the locally stored Wi-Fi configu
 
 Pocket Nexus also includes a **Screen Saver** app and automatic idle screen saver.
 
-## v0.3
+## v0.4
 
 The current hardware-testable build includes:
 
 - 135×240 portrait interface
-- Explicit M5GFX fonts and revised spacing to avoid clipped text on the real panel
-- Full-screen 16-bit M5Canvas rendering to reduce LCD flicker and improve image color
-- Front blue KEY1 as **A** (Next / Action)
-- Side KEY2 as **B** (Open / Back)
+- Explicit M5GFX fonts and full-screen 16-bit M5Canvas rendering
+- Global word wrapping for narrow-screen content instead of silent truncation
+- Page indicators and paging for information-heavy apps
+- On paged apps: **A short = next page, A long = action, B = back**
+- On the main menu: **A = next app, B = open**
+- Wi-Fi Monitor: **B long = secure Wi-Fi setup**
 - More visible battery icon, percentage, battery bar, voltage and charging indication
 - Secure temporary Wi-Fi setup portal
 - Desk information pager
@@ -47,15 +49,21 @@ The current hardware-testable build includes:
 - Countdown foundation
 - IMU tilt-ball mini game
 - Dice/randomizer with speaker feedback
-- Wi-Fi status monitor
+- Wi-Fi status monitor with a second details page
 - Screen Saver app plus automatic screen saver after 60 seconds idle
-- Optional full-screen 135×240 RGB565 custom screen saver image
-- Real IR Analyzer using the StickS3 built-in IR receiver and ESP32 legacy RMT driver, including NEC address/command/raw display and raw-signal detection
-- UI scaffolds for stocks, calendar, RSS/news and AI voice
+- The selected portrait anime image embedded as a full-screen JPEG screensaver, preserving the complete top/bottom Japanese text with small white margins
+- Real IR Analyzer using the StickS3 built-in IR receiver and ESP32 legacy RMT driver, with overview and raw-detail pages
+- Backend-ready paged scaffolds for stocks, calendar, RSS/news and AI voice
+
+## Content navigation
+
+Pocket Nexus v0.4 treats small-screen content as pageable rather than simply clipping it. Stocks, Voice AI, Calendar, RSS/News, IR Analyzer, Wi-Fi Monitor and Screen Saver currently expose multiple pages. Future live data adapters will use the same wrapping/paging components so long headlines, event titles and status messages remain readable.
 
 ## Custom screen saver
 
-Without a custom image, Pocket Nexus uses a minimal clock/date/battery screen saver. To embed an image, see [`docs/SCREENSAVER.md`](docs/SCREENSAVER.md). The intended workflow is to provide a desired image, convert it to 135×240 RGB565 in the repository, let GitHub Actions compile it, then reinstall through the same browser installer—no local IDE is required.
+The current firmware includes the user-selected portrait artwork as an embedded JPEG sized for the 135×240 StickS3 display. The image is fit inside the panel rather than aggressively cropped, so the Japanese text at the top and bottom remains visible.
+
+See [`docs/SCREENSAVER.md`](docs/SCREENSAVER.md) for the asset workflow. No local IDE is required; images can be prepared in the repository and GitHub Actions builds the updated firmware.
 
 ## Security
 
