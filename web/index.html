@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pocket Nexus v0.2 Web Installer</title>
+  <title>Pocket Nexus v0.3 Web Installer</title>
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
   <style>
     :root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -25,7 +25,7 @@
 <body>
 <main>
   <h1>Pocket Nexus</h1>
-  <p class="sub">M5Stack StickS3 · 浏览器一键烧录 · <span class="badge">v0.2</span></p>
+  <p class="sub">M5Stack StickS3 · 浏览器一键烧录 · <span class="badge">v0.3</span></p>
 
   <div class="card">
     <ol>
@@ -36,18 +36,23 @@
     </ol>
   </div>
 
+  <div class="card">
+    <strong>v0.3 更新</strong>
+    <p class="note">修复竖屏字体裁切，加入更明显的电池图标/电量条、60 秒自动屏保、可嵌入自定义 135×240 图片，并把 IR Analyzer 升级为真实 ESP32 RMT / NEC 接收器。</p>
+  </div>
+
   <div class="card warn">
-    <strong>从 v0.1 升级：</strong>
+    <strong>升级提示：</strong>
     <p class="note">如果安装器询问是否擦除设备数据，选择保留数据可继续使用 StickS3 中已保存的 Wi-Fi。只有遇到异常或想彻底重置时才选择 Erase。</p>
   </div>
 
   <esp-web-install-button manifest="manifest.json">
-    <button slot="activate">Connect & Install Pocket Nexus v0.2</button>
+    <button slot="activate">Connect & Install Pocket Nexus v0.3</button>
     <span slot="unsupported">当前浏览器不支持 Web Serial。请使用桌面版 Chrome 或 Edge。</span>
     <span slot="not-allowed">浏览器阻止了串口访问，请确认当前页面通过 HTTPS 打开。</span>
   </esp-web-install-button>
 
-  <p class="note">首次启动且没有已保存 Wi-Fi 时，StickS3 会在屏幕上显示临时 <code>PN-Setup-XXXX</code> 热点名称和随机 WPA2 密码。连接后打开 <code>192.168.4.1</code> 完成配置；热点最多允许 1 个客户端并在 10 分钟后自动关闭。</p>
+  <p class="note">首次启动且没有已保存 Wi-Fi 时，StickS3 会显示临时 <code>PN-Setup-XXXX</code> 热点名称和随机 WPA2 密码。连接后打开 <code>192.168.4.1</code> 完成配置；热点最多允许 1 个客户端并在 10 分钟后自动关闭。</p>
   <p class="note"><a href="https://github.com/XiminHu66/Pocket_Nexus">Source / Pocket_Nexus</a></p>
 </main>
 </body>
