@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pocket Nexus v0.5 Web Installer</title>
+  <title>Pocket Nexus v0.6 Web Installer</title>
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
   <style>
     :root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -14,27 +14,28 @@
 </head>
 <body><main>
   <h1>Pocket Nexus</h1>
-  <p class="sub">M5Stack StickS3 · 浏览器一键烧录 · <span class="badge">v0.5</span></p>
+  <p class="sub">M5Stack StickS3 · 浏览器一键烧录 · <span class="badge">v0.6</span></p>
   <div class="card"><ol>
     <li>使用 USB-C 数据线连接 StickS3。</li>
     <li>需要时长按侧面 Reset 约 2 秒，看到内部绿色 LED 闪烁后松开。</li>
     <li>使用桌面版 Chrome 或 Edge 打开本页。</li>
     <li>点击安装按钮，选择 <code>USB JTAG/serial debug unit</code>。</li>
   </ol></div>
-  <div class="card"><strong>v0.5 更新</strong><ul class="note">
-    <li>菜单、标题、按钮提示全面改为中文，并使用 M5GFX 中文字库。</li>
-    <li>修复中文 UTF-8 换行，避免文字被拆坏或截断。</li>
-    <li>屏保改为构建时生成的 135×240 RGB565 原始图像，不再依赖真机 JPEG 解码。</li>
-    <li>Wi-Fi 支持后台自动重连，每 12 秒恢复一次，不再只在开机时尝试一次。</li>
-    <li>股票页开始读取现有 stock-alert 的真实行情快照，无需额外 API Key。</li>
-    <li>语音页加入内置麦克风录音 + 扬声器回放测试，为后续 AI Push-to-Talk 做硬件基础。</li>
+  <div class="card"><strong>v0.6 更新</strong><ul class="note">
+    <li>完整中文菜单、标题、按钮与长文本换行继续保留。</li>
+    <li>屏保仍使用构建期生成的 135×240 RGB565 原图，避开真机 JPEG 白屏问题。</li>
+    <li>Wi-Fi 后台自动重连，并保留安全临时配置热点。</li>
+    <li>新增独立 Pocket Nexus Cloudflare API；部署后已自动验证 <code>/health</code>、<code>/api/stocks</code> 和 <code>/api/news</code> 可用。</li>
+    <li>股票页改为读取轻量 Pocket API；新闻页可显示最多 8 条实时中文快讯并逐条翻页。</li>
+    <li>日程和倒计时现在可以在本机安全配置页填写事件标题与时间，并持久保存在设备 NVS。</li>
+    <li>语音助手已具备麦克风录音 + 扬声器回放；真正 AI 云端调用仍等待设备专属认证，避免公开接口被滥用。</li>
   </ul></div>
   <div class="card warn"><strong>升级提示：</strong><p class="note">如果安装器询问是否擦除设备数据，请选择保留数据，这样已保存的 Wi-Fi 会继续保留。只有彻底重置时才选择 Erase。</p></div>
   <esp-web-install-button manifest="manifest.json">
-    <button slot="activate">Connect & Install Pocket Nexus v0.5</button>
+    <button slot="activate">Connect & Install Pocket Nexus v0.6</button>
     <span slot="unsupported">当前浏览器不支持 Web Serial。请使用桌面版 Chrome 或 Edge。</span>
     <span slot="not-allowed">浏览器阻止了串口访问，请确认页面通过 HTTPS 打开。</span>
   </esp-web-install-button>
-  <p class="note">如果设备中没有可用 Wi-Fi 配置，进入“无线网络”后长按侧键 B 可打开临时安全配置热点；连接屏幕显示的 <code>PN-Setup-XXXX</code> 后访问 <code>192.168.4.1</code>。</p>
+  <p class="note">重新配置 Wi-Fi 或设置本地事件：进入“无线网络”，长按侧键 B，连接屏幕显示的 <code>PN-Setup-XXXX</code>，再访问 <code>192.168.4.1</code>。如果 Wi-Fi 密码不变，可以留空密码栏以保留原密码。</p>
   <p class="note"><a href="https://github.com/XiminHu66/Pocket_Nexus">Source / Pocket_Nexus</a></p>
 </main></body></html>
