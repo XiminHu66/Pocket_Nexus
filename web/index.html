@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pocket Nexus v0.6 Web Installer</title>
+  <title>Pocket Nexus v0.7 Web Installer</title>
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
   <style>
     :root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -14,28 +14,27 @@
 </head>
 <body><main>
   <h1>Pocket Nexus</h1>
-  <p class="sub">M5Stack StickS3 · 浏览器一键烧录 · <span class="badge">v0.6</span></p>
+  <p class="sub">M5Stack StickS3 · 浏览器一键烧录 · <span class="badge">v0.7</span></p>
   <div class="card"><ol>
     <li>使用 USB-C 数据线连接 StickS3。</li>
     <li>需要时长按侧面 Reset 约 2 秒，看到内部绿色 LED 闪烁后松开。</li>
     <li>使用桌面版 Chrome 或 Edge 打开本页。</li>
     <li>点击安装按钮，选择 <code>USB JTAG/serial debug unit</code>。</li>
   </ol></div>
-  <div class="card"><strong>v0.6 更新</strong><ul class="note">
-    <li>完整中文菜单、标题、按钮与长文本换行继续保留。</li>
-    <li>屏保仍使用构建期生成的 135×240 RGB565 原图，避开真机 JPEG 白屏问题。</li>
-    <li>Wi-Fi 后台自动重连，并保留安全临时配置热点。</li>
-    <li>新增独立 Pocket Nexus Cloudflare API；部署后已自动验证 <code>/health</code>、<code>/api/stocks</code> 和 <code>/api/news</code> 可用。</li>
-    <li>股票页改为读取轻量 Pocket API；新闻页可显示最多 8 条实时中文快讯并逐条翻页。</li>
-    <li>日程和倒计时现在可以在本机安全配置页填写事件标题与时间，并持久保存在设备 NVS。</li>
-    <li>语音助手已具备麦克风录音 + 扬声器回放；真正 AI 云端调用仍等待设备专属认证，避免公开接口被滥用。</li>
+  <div class="card"><strong>v0.7 更新</strong><ul class="note">
+    <li>水平仪改为“姿态校准”模式：把设备摆成你认为的水平姿态，按 A 一次即可设为零点；以后横放、竖放或侧放都以这个姿态为基准。</li>
+    <li>屏保不再直接推送 RGB565 缓冲区，而是逐像素按颜色值写屏，绕开 StickS3/M5GFX 的字节序显示异常。</li>
+    <li>菜单从 14 个入口精简为 9 个：信息台、市场资讯、一键乐、日程倒数、语音助手、红外工具、水平仪、倾斜游戏、设置。</li>
+    <li>“信息台”合并首页 + 桌面信息 + 时钟；“市场资讯”合并股票 + 新闻；“日程倒数”合并日程 + 倒计时；“设置”合并 Wi-Fi + 屏保。</li>
+    <li>新增“一键乐”：骰子、抛硬币、今日运势、随机新闻、刷新天气、随机股票、帮我决定。短按 A 触发，长按 A 切换玩法。</li>
+    <li>新增轻量天气接口，无需 API Key；通过 Pocket Nexus Worker 获取城市级网络位置，再从 Open-Meteo 拉取温度、体感、湿度和风速。</li>
   </ul></div>
-  <div class="card warn"><strong>升级提示：</strong><p class="note">如果安装器询问是否擦除设备数据，请选择保留数据，这样已保存的 Wi-Fi 会继续保留。只有彻底重置时才选择 Erase。</p></div>
+  <div class="card warn"><strong>升级提示：</strong><p class="note">建议选择保留数据 / 不 Erase，这样 Wi-Fi、事件和水平仪校准数据都能保留。升级后第一次用水平仪时，把设备按你常用姿态放稳，再按一次 A 校准。</p></div>
   <esp-web-install-button manifest="manifest.json">
-    <button slot="activate">Connect & Install Pocket Nexus v0.6</button>
+    <button slot="activate">Connect & Install Pocket Nexus v0.7</button>
     <span slot="unsupported">当前浏览器不支持 Web Serial。请使用桌面版 Chrome 或 Edge。</span>
     <span slot="not-allowed">浏览器阻止了串口访问，请确认页面通过 HTTPS 打开。</span>
   </esp-web-install-button>
-  <p class="note">重新配置 Wi-Fi 或设置本地事件：进入“无线网络”，长按侧键 B，连接屏幕显示的 <code>PN-Setup-XXXX</code>，再访问 <code>192.168.4.1</code>。如果 Wi-Fi 密码不变，可以留空密码栏以保留原密码。</p>
+  <p class="note">重新配置 Wi-Fi / 日程：进入“设置”第 1 页，长按侧键 B，连接屏幕显示的 <code>PN-Setup-XXXX</code>，再访问 <code>192.168.4.1</code>。屏保预览在“设置”第 2 页长按 A。</p>
   <p class="note"><a href="https://github.com/XiminHu66/Pocket_Nexus">Source / Pocket_Nexus</a></p>
 </main></body></html>
