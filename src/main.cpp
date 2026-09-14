@@ -6,6 +6,7 @@
 #include <Preferences.h>
 #include <math.h>
 #include <time.h>
+#include "driver/rmt_rx.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -18,17 +19,28 @@
 #define PN_COUNTDOWN_EPOCH 0LL
 #endif
 
+#if __has_include("screensaver_image.h")
+#include "screensaver_image.h"
+#define PN_HAS_CUSTOM_SCREENSAVER 1
+#else
+#define PN_HAS_CUSTOM_SCREENSAVER 0
+#endif
+
 namespace pn {
 
-constexpr const char* VERSION = "0.2";
+constexpr const char* VERSION = "0.3";
 constexpr uint16_t BG = TFT_BLACK;
 constexpr uint16_t FG = TFT_WHITE;
-constexpr uint16_t MUTED = TFT_DARKGREY;
+constexpr uint16_t MUTED = 0x7BEF;
 constexpr uint16_t ACCENT = TFT_CYAN;
 constexpr uint16_t OK = TFT_GREEN;
 constexpr uint16_t WARN = TFT_YELLOW;
-constexpr uint16_t PANEL = TFT_NAVY;
+constexpr uint16_t PANEL = 0x0018;
+constexpr uint16_t PANEL2 = 0x0210;
+constexpr uint16_t BLUE = 0x041F;
 constexpr uint32_t SETUP_TIMEOUT_MS = 10UL * 60UL * 1000UL;
+constexpr uint32_t SCREENSAVER_TIMEOUT_MS = 60UL * 1000UL;
+constexpr int IR_RECEIVE_PIN = 42;
 
 struct AppEntry {
   const char* menuName;
@@ -49,23 +61,25 @@ enum class AppId : uint8_t {
   TiltGame,
   Dice,
   WiFiMonitor,
+  ScreenSaver,
   Count
 };
 
 constexpr AppEntry APPS[] = {
     {"NEXUS", "Pocket Nexus"},
     {"STOCKS", "Stock Alerts"},
-    {"VOICE AI", "AI Push-to-Talk"},
+    {"VOICE AI", "Voice AI"},
     {"PAGER", "Desk Pager"},
-    {"CALENDAR", "Next Calendar"},
+    {"CALENDAR", "Calendar"},
     {"NEWS", "RSS / News"},
     {"IR", "IR Analyzer"},
-    {"LEVEL", "Level / Attitude"},
+    {"LEVEL", "Level"},
     {"CLOCK", "NTP Clock"},
     {"COUNTDOWN", "Countdown"},
     {"GAME", "Tilt Game"},
-    {"DICE", "Dice / Random"},
-    {"WI-FI", "Wi-Fi Monitor"},
+    {"DICE", "Dice"},
+    {"WI-FI", "Wi-Fi"},
+    {"SAVER", "Screen Saver"},
 };
 
 constexpr uint8_t APP_COUNT = static_cast<uint8_t>(AppId::Count);
@@ -76,6 +90,8 @@ bool inApp = false;
 AppId current = AppId::Dashboard;
 uint32_t lastRender = 0;
 uint32_t lastSecond = 0;
+uint32_t lastInteractionAt = 0;
+bool screensaverActive = false;
 int diceValue = 1;
 float gameX = 67.0f;
 float gameY = 132.0f;
@@ -92,6 +108,18 @@ String setupToken;
 String configuredSsid;
 String configuredPassword;
 
+rmt_channel_handle_t irRxChannel = nullptr;
+static rmt_symbol_word_t irSymbols[64];
+static volatile bool irRxDone = false;
+static volatile size_t irSymbolCount = 0;
+bool irActive = false;
+bool irHasFrame = false;
+bool irFrameValid = false;
+bool irRepeatFrame = false;
+uint32_t irRawData = 0;
+uint16_t irAddress = 0;
+uint8_t irCommand = 0;
+
 int W() { return frame.width(); }
 int H() { return frame.height(); }
 
@@ -101,80 +129,140 @@ String clipText(const String& value, size_t maxChars) {
   return value.substring(0, maxChars - 3) + "...";
 }
 
+void fontSmall() {
+  frame.setTextFont(&fonts::Font0);
+  frame.setTextSize(1);
+}
+
+void fontUI() {
+  frame.setTextFont(&fonts::FreeMonoBold9pt7b);
+  frame.setTextSize(1);
+}
+
+void fontBig() {
+  frame.setTextFont(&fonts::FreeMonoBold9pt7b);
+  frame.setTextSize(2);
+}
+
 void beginFrame() {
   frame.fillSprite(BG);
   frame.setTextWrap(false);
   frame.setTextColor(FG, BG);
-  frame.setTextSize(1.0f);
   frame.setTextDatum(top_left);
+  fontSmall();
 }
 
 void present() {
   frame.pushSprite(0, 0);
 }
 
-void drawStatusBar(const char* label = "POCKET NEXUS") {
-  frame.fillRect(0, 0, W(), 22, PANEL);
-  frame.setTextColor(FG, PANEL);
-  frame.setTextSize(1.0f);
-  frame.setCursor(5, 7);
-  frame.print(label);
-
-  const int battery = M5.Power.getBatteryLevel();
-  const bool online = WiFi.status() == WL_CONNECTED;
-  frame.fillCircle(W() - 35, 11, 3, online ? OK : (setupPortalActive ? WARN : MUTED));
-  frame.setCursor(W() - 28, 7);
-  if (battery >= 0) {
-    frame.printf("%d%%", battery);
-  } else {
-    frame.print("--");
-  }
-  frame.setTextColor(FG, BG);
-}
-
-void drawAppHeader(const char* title) {
-  drawStatusBar();
-  frame.setTextColor(ACCENT, BG);
-  frame.setTextSize(1.45f);
-  frame.setCursor(7, 31);
-  frame.print(title);
-  frame.setTextSize(1.0f);
-  frame.setTextColor(FG, BG);
-  frame.drawFastHLine(7, 52, W() - 14, TFT_DARKGREY);
-}
-
-void drawFooter(const char* a = "A ACTION", const char* b = "B BACK") {
-  const int y = H() - 27;
-  frame.fillRoundRect(5, y + 2, W() - 10, 23, 6, PANEL);
-  frame.setTextSize(1.0f);
-  frame.setTextColor(ACCENT, PANEL);
-  frame.setCursor(10, y + 10);
-  frame.print(a);
-  frame.setTextColor(FG, PANEL);
-  frame.setCursor(W() - 51, y + 10);
-  frame.print(b);
-  frame.setTextColor(FG, BG);
-}
-
-void drawInfoCard(int y, const char* label, const String& value, uint16_t valueColor = FG) {
-  frame.fillRoundRect(7, y, W() - 14, 42, 7, PANEL);
-  frame.setTextSize(0.9f);
-  frame.setTextColor(MUTED, PANEL);
-  frame.setCursor(13, y + 7);
-  frame.print(label);
-  frame.setTextSize(1.25f);
-  frame.setTextColor(valueColor, PANEL);
-  frame.setCursor(13, y + 21);
-  frame.print(clipText(value, 14));
-  frame.setTextColor(FG, BG);
+bool wifiConnected() {
+  return WiFi.status() == WL_CONNECTED;
 }
 
 bool hasWiFiConfig() {
   return configuredSsid.length() > 0;
 }
 
-bool wifiConnected() {
-  return WiFi.status() == WL_CONNECTED;
+void drawBatteryIcon(int x, int y, int level, bool charging) {
+  const int w = 24;
+  const int h = 12;
+  frame.drawRoundRect(x, y, w, h, 2, FG);
+  frame.fillRect(x + w, y + 4, 2, 4, FG);
+
+  int pct = constrain(level, 0, 100);
+  int fillW = (w - 4) * pct / 100;
+  uint16_t color = pct <= 15 ? TFT_RED : (pct <= 30 ? WARN : OK);
+  if (fillW > 0) frame.fillRoundRect(x + 2, y + 2, fillW, h - 4, 1, color);
+
+  if (charging) {
+    fontSmall();
+    frame.setTextColor(TFT_BLACK, color);
+    frame.setCursor(x + 9, y + 2);
+    frame.print("+");
+  }
+}
+
+void drawStatusBar(const char* label = "NEXUS") {
+  frame.fillRect(0, 0, W(), 28, BLUE);
+  fontSmall();
+  frame.setTextColor(FG, BLUE);
+  frame.setCursor(5, 9);
+  frame.print(label);
+
+  const bool online = wifiConnected();
+  frame.fillCircle(75, 14, 4, online ? OK : (setupPortalActive ? WARN : MUTED));
+
+  const int battery = M5.Power.getBatteryLevel();
+  const bool charging = static_cast<bool>(M5.Power.isCharging());
+  drawBatteryIcon(84, 8, battery < 0 ? 0 : battery, charging);
+
+  frame.setTextColor(FG, BLUE);
+  frame.setCursor(112, 9);
+  if (battery >= 0) frame.printf("%d", battery);
+  else frame.print("--");
+}
+
+void drawAppHeader(const char* title) {
+  drawStatusBar();
+  fontUI();
+  frame.setTextColor(ACCENT, BG);
+  frame.drawString(clipText(String(title), 11), 7, 35);
+  frame.drawFastHLine(7, 58, W() - 14, MUTED);
+}
+
+void drawFooter(const char* a = "A ACTION", const char* b = "B BACK") {
+  const int y = H() - 27;
+  frame.fillRoundRect(5, y + 2, W() - 10, 23, 6, BLUE);
+  fontSmall();
+  frame.setTextColor(FG, BLUE);
+  frame.setCursor(10, y + 10);
+  frame.print(a);
+  int bx = W() - 7 - static_cast<int>(strlen(b)) * 6;
+  frame.setCursor(max(70, bx), y + 10);
+  frame.print(b);
+}
+
+void drawInfoCard(int y, const char* label, const String& value, uint16_t valueColor = FG) {
+  frame.fillRoundRect(7, y, W() - 14, 44, 8, PANEL);
+  fontSmall();
+  frame.setTextColor(MUTED, PANEL);
+  frame.setCursor(13, y + 7);
+  frame.print(label);
+
+  fontUI();
+  frame.setTextColor(valueColor, PANEL);
+  frame.drawString(clipText(value, 10), 13, y + 20);
+}
+
+void drawBatteryCard(int y) {
+  const int battery = M5.Power.getBatteryLevel();
+  const int voltage = M5.Power.getBatteryVoltage();
+  const bool charging = static_cast<bool>(M5.Power.isCharging());
+  const int pct = battery < 0 ? 0 : constrain(battery, 0, 100);
+
+  frame.fillRoundRect(7, y, W() - 14, 37, 8, PANEL);
+  fontSmall();
+  frame.setTextColor(MUTED, PANEL);
+  frame.setCursor(13, y + 6);
+  frame.print(charging ? "BATTERY +CHG" : "BATTERY");
+  if (voltage > 0) {
+    frame.setCursor(87, y + 6);
+    frame.printf("%.1fV", voltage / 1000.0f);
+  }
+
+  fontUI();
+  frame.setTextColor(pct <= 20 ? WARN : FG, PANEL);
+  String pctText = battery >= 0 ? String(battery) + "%" : "--";
+  frame.drawString(pctText, 13, y + 14);
+
+  const int barX = 58;
+  const int barY = y + 20;
+  const int barW = 60;
+  frame.drawRoundRect(barX, barY, barW, 9, 2, MUTED);
+  const int fillW = (barW - 4) * pct / 100;
+  uint16_t color = pct <= 15 ? TFT_RED : (pct <= 30 ? WARN : OK);
+  if (fillW > 0) frame.fillRoundRect(barX + 2, barY + 2, fillW, 5, 1, color);
 }
 
 bool readTime(struct tm& t) {
@@ -183,7 +271,7 @@ bool readTime(struct tm& t) {
 
 String hhmm(bool seconds = false) {
   struct tm t {};
-  if (!readTime(t)) return "--:--";
+  if (!readTime(t)) return seconds ? "--:--:--" : "--:--";
   char buf[16];
   strftime(buf, sizeof(buf), seconds ? "%H:%M:%S" : "%H:%M", &t);
   return String(buf);
@@ -201,9 +289,7 @@ String randomString(size_t length, const char* alphabet) {
   String out;
   out.reserve(length);
   const size_t alphabetLen = strlen(alphabet);
-  for (size_t i = 0; i < length; ++i) {
-    out += alphabet[esp_random() % alphabetLen];
-  }
+  for (size_t i = 0; i < length; ++i) out += alphabet[esp_random() % alphabetLen];
   return out;
 }
 
@@ -213,7 +299,6 @@ void loadWiFiCredentials() {
     configuredPassword = PN_WIFI_PASSWORD;
     return;
   }
-
   Preferences prefs;
   if (prefs.begin("pocket-nexus", true)) {
     configuredSsid = prefs.getString("ssid", "");
@@ -252,7 +337,7 @@ String setupPageHtml() {
   page += F("input,button{box-sizing:border-box;width:100%;font-size:17px;padding:13px;margin:8px 0;border-radius:10px}");
   page += F("input{background:#0f1318;color:white;border:1px solid #39434f}button{border:0;background:#35d0ba;color:#07110f;font-weight:700}");
   page += F("p{color:#aeb8c5;line-height:1.5}</style></head><body><main>");
-  page += F("<h2>Pocket Nexus Wi-Fi</h2><p>This setup page exists only on the temporary StickS3 hotspot. Credentials remain on the device.</p>");
+  page += F("<h2>Pocket Nexus Wi-Fi</h2><p>This page exists only on the temporary StickS3 hotspot. Credentials remain on-device.</p>");
   page += F("<form method='post' action='/save'><input type='hidden' name='token' value='");
   page += setupToken;
   page += F("'><input name='ssid' maxlength='32' placeholder='2.4 GHz Wi-Fi SSID' required>");
@@ -264,39 +349,39 @@ String setupPageHtml() {
 
 void renderSetupPortal() {
   beginFrame();
-  drawStatusBar("SECURE SETUP");
+  drawStatusBar("SETUP");
+  fontUI();
   frame.setTextColor(WARN, BG);
-  frame.setTextSize(1.45f);
-  frame.setCursor(7, 31);
-  frame.print("Wi-Fi Setup");
-  frame.setTextSize(0.9f);
+  frame.drawString("Wi-Fi Setup", 7, 36);
+
+  fontSmall();
   frame.setTextColor(MUTED, BG);
-  frame.setCursor(8, 58);
+  frame.setCursor(8, 66);
   frame.print("HOTSPOT");
-  frame.setTextSize(1.15f);
+  fontUI();
   frame.setTextColor(FG, BG);
-  frame.setCursor(8, 72);
-  frame.print(setupApName);
-  frame.setTextSize(0.9f);
+  frame.drawString(setupApName, 8, 78);
+
+  fontSmall();
   frame.setTextColor(MUTED, BG);
-  frame.setCursor(8, 99);
+  frame.setCursor(8, 108);
   frame.print("PASSWORD");
-  frame.setTextSize(1.15f);
+  fontUI();
   frame.setTextColor(ACCENT, BG);
-  frame.setCursor(8, 113);
-  frame.print(setupApPassword);
-  frame.setTextSize(0.9f);
+  frame.drawString(setupApPassword, 8, 120);
+
+  fontSmall();
   frame.setTextColor(MUTED, BG);
-  frame.setCursor(8, 142);
+  frame.setCursor(8, 151);
   frame.print("OPEN");
-  frame.setTextSize(1.2f);
+  fontUI();
   frame.setTextColor(FG, BG);
-  frame.setCursor(8, 156);
-  frame.print("192.168.4.1");
-  frame.setTextSize(0.9f);
+  frame.drawString("192.168.4.1", 8, 163);
+
+  fontSmall();
   frame.setTextColor(MUTED, BG);
-  frame.setCursor(8, 184);
-  frame.print("1 client / 10 min timeout");
+  frame.setCursor(8, 195);
+  frame.print("1 client / 10 min");
   drawFooter("A -", "B CANCEL");
   present();
 }
@@ -326,9 +411,8 @@ void installSetupRoutes() {
     }
 
     saveWiFiCredentials(ssid, password);
-    addSetupSecurityHeaders();
     setupServer.send(200, "text/html; charset=utf-8",
-                     "<html><body style='font-family:system-ui;background:#111;color:#fff'><h2>Saved</h2><p>Pocket Nexus is restarting.</p></body></html>");
+                     "<html><body><h2>Saved</h2><p>Pocket Nexus is restarting.</p></body></html>");
     delay(700);
     ESP.restart();
   });
@@ -378,13 +462,12 @@ void startSetupPortal() {
 void renderConnecting() {
   beginFrame();
   drawAppHeader("Connecting");
+  fontUI();
   frame.setTextColor(ACCENT, BG);
-  frame.setTextSize(1.35f);
-  frame.setCursor(8, 78);
-  frame.print(clipText(configuredSsid, 14));
-  frame.setTextSize(1.0f);
+  frame.drawString(clipText(configuredSsid, 10), 8, 78);
+  fontSmall();
   frame.setTextColor(MUTED, BG);
-  frame.setCursor(8, 108);
+  frame.setCursor(8, 112);
   frame.print("Trying saved Wi-Fi...");
   present();
 }
@@ -420,34 +503,30 @@ void connectWiFi() {
 void renderMenu() {
   beginFrame();
   drawStatusBar();
+  fontSmall();
   frame.setTextColor(MUTED, BG);
-  frame.setTextSize(0.9f);
-  frame.setCursor(7, 27);
-  frame.printf("APPS  %02u / %02u", selected + 1, APP_COUNT);
+  frame.setCursor(7, 34);
+  frame.printf("APPS %02u/%02u", selected + 1, APP_COUNT);
 
   constexpr uint8_t rows = 4;
-  uint8_t start = 0;
-  if (selected >= rows) start = selected - rows + 1;
+  uint8_t start = selected >= rows ? selected - rows + 1 : 0;
 
   for (uint8_t row = 0; row < rows; ++row) {
     const uint8_t idx = start + row;
     if (idx >= APP_COUNT) break;
-    const int y = 42 + row * 42;
+    const int y = 48 + row * 39;
     const bool active = idx == selected;
+    frame.fillRoundRect(5, y, W() - 10, 34, 7, active ? BLUE : PANEL2);
+    if (!active) frame.drawRoundRect(5, y, W() - 10, 34, 7, MUTED);
 
-    if (active) {
-      frame.fillRoundRect(5, y, W() - 10, 35, 7, ACCENT);
-      frame.setTextColor(TFT_BLACK, ACCENT);
-    } else {
-      frame.drawRoundRect(5, y, W() - 10, 35, 7, TFT_DARKGREY);
-      frame.setTextColor(FG, BG);
-    }
-
-    frame.setTextSize(1.25f);
-    frame.setCursor(11, y + 11);
+    fontSmall();
+    frame.setTextColor(active ? FG : MUTED, active ? BLUE : PANEL2);
+    frame.setCursor(10, y + 13);
     frame.printf("%02u", idx + 1);
-    frame.setCursor(39, y + 11);
-    frame.print(APPS[idx].menuName);
+
+    fontUI();
+    frame.setTextColor(FG, active ? BLUE : PANEL2);
+    frame.drawString(APPS[idx].menuName, 34, y + 7);
   }
 
   drawFooter("A NEXT", "B OPEN");
@@ -458,22 +537,18 @@ void renderDashboard() {
   beginFrame();
   drawAppHeader("Pocket Nexus");
 
+  fontBig();
   frame.setTextColor(ACCENT, BG);
-  frame.setTextSize(2.35f);
-  frame.setCursor(8, 62);
-  frame.print(hhmm());
+  frame.drawString(hhmm(), 8, 65);
 
-  frame.setTextSize(1.0f);
+  fontSmall();
   frame.setTextColor(MUTED, BG);
-  frame.setCursor(9, 92);
+  frame.setCursor(9, 108);
   frame.print(dateLine());
 
   String wifiLine = wifiConnected() ? String(WiFi.RSSI()) + " dBm" : "Offline";
-  drawInfoCard(112, "WI-FI", wifiLine, wifiConnected() ? OK : WARN);
-
-  const int battery = M5.Power.getBatteryLevel();
-  drawInfoCard(158, "BATTERY", battery >= 0 ? String(battery) + "%" : "Unknown", battery >= 20 ? FG : WARN);
-
+  drawInfoCard(126, "WI-FI", wifiLine, wifiConnected() ? OK : WARN);
+  drawBatteryCard(174);
   drawFooter("A REFRESH", "B BACK");
   present();
 }
@@ -481,17 +556,16 @@ void renderDashboard() {
 void renderPlaceholder(const char* title, const char* line1, const char* line2) {
   beginFrame();
   drawAppHeader(title);
-  frame.fillRoundRect(7, 70, W() - 14, 98, 9, PANEL);
+  frame.fillRoundRect(7, 72, W() - 14, 102, 9, PANEL);
+  fontUI();
   frame.setTextColor(ACCENT, PANEL);
-  frame.setTextSize(1.2f);
-  frame.setCursor(13, 84);
-  frame.print(line1);
+  frame.drawString(clipText(String(line1), 10), 13, 84);
+  fontSmall();
   frame.setTextColor(FG, PANEL);
-  frame.setTextSize(1.0f);
-  frame.setCursor(13, 112);
+  frame.setCursor(13, 118);
   frame.print(line2);
   frame.setTextColor(MUTED, PANEL);
-  frame.setCursor(13, 142);
+  frame.setCursor(13, 145);
   frame.print(strlen(PN_API_BASE_URL) ? "API configured" : "Backend next");
   drawFooter("A REFRESH", "B BACK");
   present();
@@ -500,17 +574,15 @@ void renderPlaceholder(const char* title, const char* line1, const char* line2) 
 void renderDeskPager() {
   beginFrame();
   drawAppHeader("Desk Pager");
+  fontBig();
   frame.setTextColor(ACCENT, BG);
-  frame.setTextSize(2.4f);
-  frame.setCursor(8, 65);
-  frame.print(hhmm());
-  frame.setTextSize(1.0f);
+  frame.drawString(hhmm(), 8, 67);
+  fontSmall();
   frame.setTextColor(MUTED, BG);
-  frame.setCursor(9, 96);
+  frame.setCursor(9, 111);
   frame.print(dateLine());
-
-  drawInfoCard(119, "NETWORK", wifiConnected() ? "Online" : "Offline", wifiConnected() ? OK : WARN);
-  drawInfoCard(165, "SIGNAL", wifiConnected() ? String(WiFi.RSSI()) + " dBm" : "--");
+  drawInfoCard(132, "NETWORK", wifiConnected() ? "Online" : "Offline", wifiConnected() ? OK : WARN);
+  drawBatteryCard(174);
   drawFooter("A REFRESH", "B BACK");
   present();
 }
@@ -534,41 +606,42 @@ void renderLevel() {
 
   beginFrame();
   drawAppHeader("Level");
-  frame.setTextSize(1.05f);
+
+  fontSmall();
   frame.setTextColor(FG, BG);
-  frame.setCursor(8, 64);
+  frame.setCursor(8, 70);
   frame.printf("Pitch %5.1f", pitch);
-  frame.setCursor(8, 82);
+  frame.setCursor(8, 86);
   frame.printf("Roll  %5.1f", roll);
 
   const int cx = W() / 2;
-  const int cy = 146;
-  frame.drawCircle(cx, cy, 43, TFT_DARKGREY);
-  frame.drawCircle(cx, cy, 22, TFT_DARKGREY);
-  frame.drawFastHLine(cx - 39, cy, 78, MUTED);
-  frame.drawFastVLine(cx, cy - 39, 78, MUTED);
-  const int bx = constrain(cx + static_cast<int>(ay * 38.0f), cx - 38, cx + 38);
-  const int by = constrain(cy - static_cast<int>(ax * 38.0f), cy - 38, cy + 38);
+  const int cy = 151;
+  frame.drawCircle(cx, cy, 42, MUTED);
+  frame.drawCircle(cx, cy, 21, MUTED);
+  frame.drawFastHLine(cx - 38, cy, 76, MUTED);
+  frame.drawFastVLine(cx, cy - 38, 76, MUTED);
+  const int bx = constrain(cx + static_cast<int>(ay * 37.0f), cx - 37, cx + 37);
+  const int by = constrain(cy - static_cast<int>(ax * 37.0f), cy - 37, cy + 37);
   frame.fillCircle(bx, by, 7, ACCENT);
-  drawFooter("A HOLD", "B BACK");
+
+  drawFooter("A ZERO", "B BACK");
   present();
 }
 
 void renderClock() {
   beginFrame();
   drawAppHeader("NTP Clock");
+  fontBig();
   frame.setTextColor(ACCENT, BG);
-  frame.setTextSize(2.15f);
-  frame.setCursor(7, 78);
-  frame.print(hhmm(true));
-  frame.setTextSize(1.15f);
+  frame.drawString(hhmm(), 8, 78);
+  fontUI();
   frame.setTextColor(FG, BG);
-  frame.setCursor(8, 118);
-  frame.print(dateLine());
-  frame.setTextSize(1.0f);
+  frame.drawString(dateLine(), 8, 125);
+  fontSmall();
   frame.setTextColor(wifiConnected() ? OK : WARN, BG);
-  frame.setCursor(8, 153);
+  frame.setCursor(8, 160);
   frame.print(wifiConnected() ? "NTP synced" : "Offline / unsynced");
+  drawBatteryCard(174);
   drawFooter("A REFRESH", "B BACK");
   present();
 }
@@ -576,22 +649,18 @@ void renderClock() {
 void renderCountdown() {
   beginFrame();
   drawAppHeader("Countdown");
+  fontUI();
   frame.setTextColor(ACCENT, BG);
-  frame.setTextSize(1.2f);
-  frame.setCursor(8, 70);
-  frame.print(clipText(String(PN_COUNTDOWN_LABEL), 15));
+  frame.drawString(clipText(String(PN_COUNTDOWN_LABEL), 10), 8, 72);
 
   if (PN_COUNTDOWN_EPOCH <= 0) {
+    fontUI();
     frame.setTextColor(WARN, BG);
-    frame.setTextSize(1.4f);
-    frame.setCursor(8, 112);
-    frame.print("Not configured");
+    frame.drawString("Not set", 8, 115);
+    fontSmall();
     frame.setTextColor(MUTED, BG);
-    frame.setTextSize(1.0f);
-    frame.setCursor(8, 145);
-    frame.print("Remote countdown sync");
-    frame.setCursor(8, 162);
-    frame.print("is planned next.");
+    frame.setCursor(8, 150);
+    frame.print("Remote sync is next.");
   } else {
     const time_t now = time(nullptr);
     long long delta = static_cast<long long>(PN_COUNTDOWN_EPOCH) - static_cast<long long>(now);
@@ -599,13 +668,11 @@ void renderCountdown() {
     if (overdue) delta = -delta;
     const long long days = delta / 86400LL;
     const int hours = (delta % 86400LL) / 3600LL;
+    fontBig();
     frame.setTextColor(FG, BG);
-    frame.setTextSize(2.0f);
-    frame.setCursor(8, 112);
-    frame.printf("%lldd", days);
-    frame.setTextSize(1.3f);
-    frame.setCursor(8, 150);
-    frame.printf("%02dh %s", hours, overdue ? "late" : "left");
+    frame.drawString(String(days) + "d", 8, 112);
+    fontUI();
+    frame.drawString(String(hours) + "h " + (overdue ? "late" : "left"), 8, 160);
   }
   drawFooter("A REFRESH", "B BACK");
   present();
@@ -619,11 +686,13 @@ void renderDice(bool rollNow) {
 
   beginFrame();
   drawAppHeader("Dice");
-  frame.fillRoundRect(18, 74, W() - 36, 105, 16, PANEL);
+  frame.fillRoundRect(16, 78, W() - 32, 108, 16, PANEL);
+  fontBig();
+  frame.setTextSize(3);
   frame.setTextColor(ACCENT, PANEL);
-  frame.setTextSize(6.0f);
-  frame.setCursor(49, 96);
-  frame.print(diceValue);
+  frame.setTextDatum(middle_center);
+  frame.drawString(String(diceValue), W() / 2, 132);
+  frame.setTextDatum(top_left);
   drawFooter("A ROLL", "B BACK");
   present();
 }
@@ -633,21 +702,21 @@ void renderWiFiMonitor() {
   drawAppHeader("Wi-Fi");
 
   if (wifiConnected()) {
-    drawInfoCard(64, "STATUS", "Connected", OK);
-    drawInfoCard(110, "SSID", clipText(WiFi.SSID(), 14));
-    drawInfoCard(156, "SIGNAL / IP", String(WiFi.RSSI()) + " dBm");
-    frame.setTextSize(0.85f);
+    drawInfoCard(68, "STATUS", "Connected", OK);
+    drawInfoCard(116, "SSID", clipText(WiFi.SSID(), 10));
+    drawInfoCard(164, "SIGNAL", String(WiFi.RSSI()) + " dBm");
+    fontSmall();
     frame.setTextColor(MUTED, BG);
-    frame.setCursor(10, 202);
-    frame.print(clipText(WiFi.localIP().toString(), 18));
+    frame.setCursor(10, 207);
+    frame.print(WiFi.localIP().toString());
   } else {
-    drawInfoCard(64, "STATUS", hasWiFiConfig() ? "Disconnected" : "Not configured", WARN);
-    drawInfoCard(110, "SAVED SSID", hasWiFiConfig() ? clipText(configuredSsid, 14) : "None");
-    frame.setTextSize(0.9f);
+    drawInfoCard(68, "STATUS", hasWiFiConfig() ? "Disconnected" : "Not set", WARN);
+    drawInfoCard(116, "SAVED SSID", hasWiFiConfig() ? clipText(configuredSsid, 10) : "None");
+    fontSmall();
     frame.setTextColor(MUTED, BG);
-    frame.setCursor(9, 164);
-    frame.print("A: reconnect");
-    frame.setCursor(9, 181);
+    frame.setCursor(9, 171);
+    frame.print("A reconnect");
+    frame.setCursor(9, 189);
     frame.print("Hold B: secure setup");
   }
   drawFooter("A RETRY", "B BACK");
@@ -658,43 +727,265 @@ void renderTiltGame() {
   float ax, ay, az;
   readAccel(ax, ay, az);
 
-  // Portrait transform: front blue button sits at the bottom of the screen.
   gameVx = constrain(gameVx + ay * 0.28f, -3.5f, 3.5f);
   gameVy = constrain(gameVy - ax * 0.28f, -3.5f, 3.5f);
   gameVx *= 0.96f;
   gameVy *= 0.96f;
   gameX = constrain(gameX + gameVx, 14.0f, static_cast<float>(W() - 14));
-  gameY = constrain(gameY + gameVy, 72.0f, static_cast<float>(H() - 43));
+  gameY = constrain(gameY + gameVy, 76.0f, static_cast<float>(H() - 45));
 
   beginFrame();
   drawAppHeader("Tilt Game");
-  frame.drawRoundRect(7, 62, W() - 14, H() - 103, 8, TFT_DARKGREY);
+  frame.drawRoundRect(7, 66, W() - 14, H() - 109, 8, MUTED);
   frame.fillCircle(static_cast<int>(gameX), static_cast<int>(gameY), 7, ACCENT);
-  frame.setTextSize(0.85f);
-  frame.setTextColor(MUTED, BG);
-  frame.setCursor(8, H() - 38);
-  frame.print("Tilt to move");
   drawFooter("A RESET", "B BACK");
   present();
+}
+
+bool irRxDoneCallback(rmt_channel_handle_t, const rmt_rx_done_event_data_t* edata, void*) {
+  irSymbolCount = edata->num_symbols;
+  irRxDone = true;
+  return true;
+}
+
+bool decodeNEC(const rmt_symbol_word_t* symbols, size_t count, uint32_t* outRaw, bool* outRepeat) {
+  *outRaw = 0;
+  *outRepeat = false;
+  if (count < 2) return false;
+
+  uint32_t headerLow = symbols[0].duration0;
+  uint32_t headerHigh = symbols[0].duration1;
+
+  if (headerLow > 8000 && headerHigh > 4000) {
+    if (count < 33) return false;
+  } else if (headerLow > 8000 && headerHigh > 2000 && headerHigh < 3000) {
+    *outRepeat = true;
+    return false;
+  } else {
+    return false;
+  }
+
+  for (int i = 0; i < 32; ++i) {
+    uint32_t mark = symbols[i + 1].duration0;
+    uint32_t space = symbols[i + 1].duration1;
+    if (mark < 300 || mark > 800) return false;
+    if (space > 1000) *outRaw |= (1UL << i);
+  }
+
+  uint8_t cmd = (*outRaw >> 16) & 0xFF;
+  uint8_t cmdInv = (*outRaw >> 24) & 0xFF;
+  return (cmd ^ cmdInv) == 0xFF;
+}
+
+void startIrReceive() {
+  if (!irRxChannel) return;
+  rmt_receive_config_t cfg = {
+      .signal_range_min_ns = 1000,
+      .signal_range_max_ns = 20000000,
+  };
+  rmt_receive(irRxChannel, irSymbols, sizeof(irSymbols), &cfg);
+}
+
+bool startIrAnalyzer() {
+  if (irActive) return true;
+
+  M5.Speaker.end();
+  M5.Power.setExtOutput(true, m5::ext_none);
+
+  rmt_rx_channel_config_t rxCfg = {
+      .gpio_num = static_cast<gpio_num_t>(IR_RECEIVE_PIN),
+      .clk_src = RMT_CLK_SRC_DEFAULT,
+      .resolution_hz = 1000000,
+      .mem_block_symbols = 128,
+  };
+
+  if (rmt_new_rx_channel(&rxCfg, &irRxChannel) != ESP_OK) {
+    irRxChannel = nullptr;
+    return false;
+  }
+
+  rmt_rx_event_callbacks_t cbs = {
+      .on_recv_done = irRxDoneCallback,
+  };
+  if (rmt_rx_register_event_callbacks(irRxChannel, &cbs, nullptr) != ESP_OK ||
+      rmt_enable(irRxChannel) != ESP_OK) {
+    rmt_del_channel(irRxChannel);
+    irRxChannel = nullptr;
+    return false;
+  }
+
+  irRxDone = false;
+  irSymbolCount = 0;
+  irHasFrame = false;
+  irActive = true;
+  startIrReceive();
+  return true;
+}
+
+void stopIrAnalyzer() {
+  if (!irActive) return;
+  if (irRxChannel) {
+    rmt_disable(irRxChannel);
+    rmt_del_channel(irRxChannel);
+    irRxChannel = nullptr;
+  }
+  M5.Power.setExtOutput(false, m5::ext_none);
+  M5.Speaker.begin();
+  irActive = false;
+  irRxDone = false;
+}
+
+void processIrFrame() {
+  if (!irActive || !irRxDone) return;
+  irRxDone = false;
+
+  uint32_t raw = 0;
+  bool repeat = false;
+  bool valid = decodeNEC(irSymbols, irSymbolCount, &raw, &repeat);
+
+  irHasFrame = true;
+  irFrameValid = valid;
+  irRepeatFrame = repeat;
+  irRawData = raw;
+
+  if (valid) {
+    irAddress = raw & 0xFFFF;
+    irCommand = (raw >> 16) & 0xFF;
+  }
+
+  startIrReceive();
 }
 
 void renderIRAnalyzer() {
   beginFrame();
   drawAppHeader("IR Analyzer");
-  frame.fillRoundRect(7, 68, W() - 14, 112, 9, PANEL);
-  frame.setTextColor(WARN, PANEL);
-  frame.setTextSize(1.15f);
-  frame.setCursor(13, 82);
-  frame.print("RMT next");
-  frame.setTextSize(0.95f);
-  frame.setTextColor(FG, PANEL);
-  frame.setCursor(13, 111);
-  frame.print("NEC + raw pulses");
-  frame.setTextColor(MUTED, PANEL);
-  frame.setCursor(13, 139);
-  frame.print("Speaker amp will");
-  frame.setCursor(13, 155);
-  frame.print("disable during RX");
+
+  fontSmall();
+  frame.setTextColor(irActive ? OK : WARN, BG);
+  frame.setCursor(8, 69);
+  frame.print(irActive ? "Listening on GPIO42 / RMT" : "Receiver unavailable");
+
+  if (!irHasFrame) {
+    fontUI();
+    frame.setTextColor(ACCENT, BG);
+    frame.drawString("Point remote", 8, 102);
+    fontSmall();
+    frame.setTextColor(MUTED, BG);
+    frame.setCursor(8, 133);
+    frame.print("Press a remote key.");
+    frame.setCursor(8, 151);
+    frame.print("Keep >30 cm away.");
+  } else if (irRepeatFrame) {
+    fontUI();
+    frame.setTextColor(WARN, BG);
+    frame.drawString("NEC REPEAT", 8, 104);
+    fontSmall();
+    frame.setTextColor(MUTED, BG);
+    frame.setCursor(8, 140);
+    frame.printf("%u symbols", static_cast<unsigned>(irSymbolCount));
+  } else if (irFrameValid) {
+    fontUI();
+    frame.setTextColor(OK, BG);
+    frame.drawString("NEC OK", 8, 94);
+    fontSmall();
+    frame.setTextColor(FG, BG);
+    frame.setCursor(8, 128);
+    frame.printf("Addr 0x%04X", irAddress);
+    frame.setCursor(8, 146);
+    frame.printf("Cmd  0x%02X", irCommand);
+    frame.setCursor(8, 164);
+    frame.printf("Raw  %08lX", static_cast<unsigned long>(irRawData));
+  } else {
+    fontUI();
+    frame.setTextColor(WARN, BG);
+    frame.drawString("RAW SIGNAL", 8, 104);
+    fontSmall();
+    frame.setTextColor(FG, BG);
+    frame.setCursor(8, 140);
+    frame.printf("%u symbols", static_cast<unsigned>(irSymbolCount));
+    frame.setCursor(8, 158);
+    frame.print("Not NEC / decode fail");
+  }
+
+  drawFooter("A CLEAR", "B BACK");
+  present();
+}
+
+void renderDefaultScreensaver() {
+  beginFrame();
+
+  fontSmall();
+  frame.setTextColor(MUTED, BG);
+  frame.setCursor(8, 10);
+  frame.print("POCKET NEXUS");
+
+  fontBig();
+  frame.setTextColor(FG, BG);
+  frame.setTextDatum(middle_center);
+  frame.drawString(hhmm(), W() / 2, 92);
+
+  fontUI();
+  frame.setTextColor(ACCENT, BG);
+  frame.drawString(dateLine(), W() / 2, 132);
+
+  const int battery = M5.Power.getBatteryLevel();
+  const bool charging = static_cast<bool>(M5.Power.isCharging());
+  drawBatteryIcon((W() - 24) / 2, 166, battery < 0 ? 0 : battery, charging);
+
+  fontSmall();
+  frame.setTextColor(MUTED, BG);
+  frame.drawString("press any key", W() / 2, 207);
+  frame.setTextDatum(top_left);
+  present();
+}
+
+void renderCustomScreensaver() {
+#if PN_HAS_CUSTOM_SCREENSAVER
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.pushImage(0, 0, PN_SCREENSAVER_WIDTH, PN_SCREENSAVER_HEIGHT, PN_SCREENSAVER_RGB565);
+#else
+  renderDefaultScreensaver();
+#endif
+}
+
+void activateScreensaver() {
+  if (setupPortalActive || irActive) return;
+  screensaverActive = true;
+  renderCustomScreensaver();
+}
+
+void leaveScreensaver() {
+  if (!screensaverActive) return;
+  screensaverActive = false;
+  lastInteractionAt = millis();
+  renderMenu();
+}
+
+void renderScreenSaverApp() {
+  beginFrame();
+  drawAppHeader("Screen Saver");
+  fontUI();
+  frame.setTextColor(ACCENT, BG);
+#if PN_HAS_CUSTOM_SCREENSAVER
+  frame.drawString("Custom image", 8, 82);
+#else
+  frame.drawString("Clock mode", 8, 82);
+#endif
+  fontSmall();
+  frame.setTextColor(FG, BG);
+  frame.setCursor(8, 119);
+  frame.print("A: start now");
+  frame.setCursor(8, 139);
+  frame.print("Auto: 60 sec idle");
+  frame.setTextColor(MUTED, BG);
+  frame.setCursor(8, 169);
+#if PN_HAS_CUSTOM_SCREENSAVER
+  frame.print("135x240 image loaded");
+#else
+  frame.print("Send me an image to");
+  frame.setCursor(8, 185);
+  frame.print("embed it in firmware.");
+#endif
   drawFooter("A START", "B BACK");
   present();
 }
@@ -704,7 +995,7 @@ void renderCurrent(bool action = false) {
   switch (current) {
     case AppId::Dashboard: renderDashboard(); break;
     case AppId::Stocks: renderPlaceholder("Stock Alerts", "Market adapter", "Live endpoint next"); break;
-    case AppId::VoiceAI: renderPlaceholder("AI Push-to-Talk", "Mic + speaker", "STT / TTS next"); break;
+    case AppId::VoiceAI: renderPlaceholder("Voice AI", "Mic + speaker", "STT / TTS next"); break;
     case AppId::DeskPager: renderDeskPager(); break;
     case AppId::Calendar: renderPlaceholder("Calendar", "Next event", "Secure adapter next"); break;
     case AppId::News: renderPlaceholder("RSS / News", "Priority feed", "Feed endpoint next"); break;
@@ -715,6 +1006,7 @@ void renderCurrent(bool action = false) {
     case AppId::TiltGame: renderTiltGame(); break;
     case AppId::Dice: renderDice(action); break;
     case AppId::WiFiMonitor: renderWiFiMonitor(); break;
+    case AppId::ScreenSaver: renderScreenSaverApp(); break;
     default: break;
   }
 }
@@ -722,71 +1014,111 @@ void renderCurrent(bool action = false) {
 void enterSelected() {
   current = static_cast<AppId>(selected);
   inApp = true;
+
   if (current == AppId::Dice) diceValue = 1 + static_cast<int>(esp_random() % 6);
   if (current == AppId::TiltGame) {
     gameX = W() / 2.0f;
     gameY = H() / 2.0f;
     gameVx = gameVy = 0.0f;
   }
+  if (current == AppId::IRAnalyzer) startIrAnalyzer();
+
   renderCurrent(false);
 }
 
+void leaveCurrentApp() {
+  if (current == AppId::IRAnalyzer) stopIrAnalyzer();
+  inApp = false;
+  renderMenu();
+}
+
+void markInteraction() {
+  lastInteractionAt = millis();
+}
+
 void handleButtons() {
-  // StickS3 KEY1/front blue button -> M5.BtnA.
-  // StickS3 KEY2/side button       -> M5.BtnB.
-  if (!inApp) {
-    if (M5.BtnA.wasClicked()) {
-      selected = (selected + 1) % APP_COUNT;
-      renderMenu();
-    }
-    if (M5.BtnB.wasClicked()) {
-      enterSelected();
-    }
+  const bool aClick = M5.BtnA.wasClicked();
+  const bool bClick = M5.BtnB.wasClicked();
+  const bool bHold = M5.BtnB.wasHold();
+
+  if (screensaverActive) {
+    if (aClick || bClick || bHold) leaveScreensaver();
     return;
   }
 
-  if (current == AppId::WiFiMonitor && M5.BtnB.wasHold()) {
+  if (aClick || bClick || bHold) markInteraction();
+
+  if (!inApp) {
+    if (aClick) {
+      selected = (selected + 1) % APP_COUNT;
+      renderMenu();
+    }
+    if (bClick) enterSelected();
+    return;
+  }
+
+  if (current == AppId::WiFiMonitor && bHold) {
     startSetupPortal();
     return;
   }
 
-  if (M5.BtnB.wasClicked()) {
-    inApp = false;
-    renderMenu();
+  if (bClick) {
+    leaveCurrentApp();
     return;
   }
 
-  if (M5.BtnA.wasClicked()) {
-    if (current == AppId::WiFiMonitor && !wifiConnected()) {
-      tryWiFiConnection();
-    }
+  if (aClick) {
+    if (current == AppId::WiFiMonitor && !wifiConnected()) tryWiFiConnection();
     if (current == AppId::TiltGame) {
       gameX = W() / 2.0f;
       gameY = H() / 2.0f;
       gameVx = gameVy = 0.0f;
+    }
+    if (current == AppId::IRAnalyzer) {
+      irHasFrame = false;
+      irFrameValid = false;
+      irRepeatFrame = false;
+    }
+    if (current == AppId::ScreenSaver) {
+      activateScreensaver();
+      return;
     }
     renderCurrent(true);
   }
 }
 
 void periodicRefresh() {
-  if (!inApp || setupPortalActive) return;
+  if (setupPortalActive || screensaverActive) return;
 
   const uint32_t now = millis();
+  if (!irActive && now - lastInteractionAt >= SCREENSAVER_TIMEOUT_MS) {
+    activateScreensaver();
+    return;
+  }
+
+  if (!inApp) return;
+
+  if (current == AppId::IRAnalyzer) {
+    if (irRxDone) {
+      processIrFrame();
+      renderIRAnalyzer();
+    }
+    return;
+  }
+
   if (current == AppId::TiltGame && now - lastRender >= 40) {
     renderTiltGame();
-    lastRender = now;
     return;
   }
 
   if (current == AppId::Level && now - lastRender >= 90) {
     renderLevel();
-    lastRender = now;
     return;
   }
 
   if ((current == AppId::Clock || current == AppId::Dashboard || current == AppId::DeskPager ||
-       current == AppId::Countdown || current == AppId::WiFiMonitor) && now - lastSecond >= 1000) {
+       current == AppId::Countdown || current == AppId::WiFiMonitor) &&
+      now - lastSecond >= 1000) {
     lastSecond = now;
     renderCurrent(false);
   }
@@ -798,6 +1130,7 @@ void serviceSetupPortal() {
 
   if (M5.BtnB.wasClicked() || millis() - setupStartedAt >= SETUP_TIMEOUT_MS) {
     stopSetupPortal();
+    markInteraction();
     renderMenu();
   }
 }
@@ -809,33 +1142,31 @@ void setup() {
   M5.begin(cfg);
   Serial.begin(115200);
 
-  // Portrait: rotating the physical device clockwise puts the blue/front A key at the bottom.
-  M5.Display.setRotation(0);  // 135 x 240 portrait
+  M5.Display.setRotation(0);
   M5.Display.setTextWrap(false);
 
-  pn::frame.setColorDepth(8);
+  pn::frame.setColorDepth(16);
   pn::frame.createSprite(M5.Display.width(), M5.Display.height());
   pn::frame.setTextWrap(false);
 
   pn::beginFrame();
   pn::drawStatusBar();
+  pn::fontUI();
   pn::frame.setTextColor(pn::ACCENT, pn::BG);
-  pn::frame.setTextSize(1.7f);
-  pn::frame.setCursor(8, 70);
-  pn::frame.print("Pocket Nexus");
-  pn::frame.setTextSize(1.15f);
+  pn::frame.drawString("Pocket", 8, 72);
+  pn::frame.drawString("Nexus", 8, 96);
+  pn::fontSmall();
   pn::frame.setTextColor(pn::MUTED, pn::BG);
-  pn::frame.setCursor(8, 103);
+  pn::frame.setCursor(8, 132);
   pn::frame.printf("v%s", pn::VERSION);
-  pn::frame.setCursor(8, 128);
+  pn::frame.setCursor(8, 150);
   pn::frame.print("Portrait UI");
   pn::present();
   delay(350);
 
+  pn::lastInteractionAt = millis();
   pn::connectWiFi();
-  if (!pn::setupPortalActive) {
-    pn::renderMenu();
-  }
+  if (!pn::setupPortalActive) pn::renderMenu();
 }
 
 void loop() {
