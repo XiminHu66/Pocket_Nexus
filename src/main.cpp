@@ -6,7 +6,8 @@
 #include <Preferences.h>
 #include <math.h>
 #include <time.h>
-#include "driver/rmt_rx.h"
+#include "driver/rmt.h"
+#include "freertos/ringbuf.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -108,14 +109,13 @@ String setupToken;
 String configuredSsid;
 String configuredPassword;
 
-rmt_channel_handle_t irRxChannel = nullptr;
-static rmt_symbol_word_t irSymbols[64];
-static volatile bool irRxDone = false;
-static volatile size_t irSymbolCount = 0;
+RingbufHandle_t irRingBuffer = nullptr;
+constexpr rmt_channel_t IR_RMT_CHANNEL = RMT_CHANNEL_0;
 bool irActive = false;
 bool irHasFrame = false;
 bool irFrameValid = false;
 bool irRepeatFrame = false;
+size_t irSymbolCount = 0;
 uint32_t irRawData = 0;
 uint16_t irAddress = 0;
 uint8_t irCommand = 0;
@@ -742,13 +742,7 @@ void renderTiltGame() {
   present();
 }
 
-bool irRxDoneCallback(rmt_channel_handle_t, const rmt_rx_done_event_data_t* edata, void*) {
-  irSymbolCount = edata->num_symbols;
-  irRxDone = true;
-  return true;
-}
-
-bool decodeNEC(const rmt_symbol_word_t* symbols, size_t count, uint32_t* outRaw, bool* outRepeat) {
+bool decodeNEC(const rmt_item32_t* symbols, size_t count, uint32_t* outRaw, bool* outRepeat) {
   *outRaw = 0;
   *outRepeat = false;
   if (count < 2) return false;
@@ -777,72 +771,65 @@ bool decodeNEC(const rmt_symbol_word_t* symbols, size_t count, uint32_t* outRaw,
   return (cmd ^ cmdInv) == 0xFF;
 }
 
-void startIrReceive() {
-  if (!irRxChannel) return;
-  rmt_receive_config_t cfg = {
-      .signal_range_min_ns = 1000,
-      .signal_range_max_ns = 20000000,
-  };
-  rmt_receive(irRxChannel, irSymbols, sizeof(irSymbols), &cfg);
-}
-
 bool startIrAnalyzer() {
   if (irActive) return true;
 
   M5.Speaker.end();
   M5.Power.setExtOutput(true, m5::ext_none);
 
-  rmt_rx_channel_config_t rxCfg = {
-      .gpio_num = static_cast<gpio_num_t>(IR_RECEIVE_PIN),
-      .clk_src = RMT_CLK_SRC_DEFAULT,
-      .resolution_hz = 1000000,
-      .mem_block_symbols = 128,
-  };
+  rmt_config_t cfg = {};
+  cfg.rmt_mode = RMT_MODE_RX;
+  cfg.channel = IR_RMT_CHANNEL;
+  cfg.gpio_num = static_cast<gpio_num_t>(IR_RECEIVE_PIN);
+  cfg.clk_div = 80;
+  cfg.mem_block_num = 2;
+  cfg.rx_config.filter_en = true;
+  cfg.rx_config.filter_ticks_thresh = 80;
+  cfg.rx_config.idle_threshold = 15000;
 
-  if (rmt_new_rx_channel(&rxCfg, &irRxChannel) != ESP_OK) {
-    irRxChannel = nullptr;
+  if (rmt_config(&cfg) != ESP_OK ||
+      rmt_driver_install(IR_RMT_CHANNEL, 2048, 0) != ESP_OK ||
+      rmt_get_ringbuf_handle(IR_RMT_CHANNEL, &irRingBuffer) != ESP_OK ||
+      irRingBuffer == nullptr ||
+      rmt_rx_start(IR_RMT_CHANNEL, true) != ESP_OK) {
+    rmt_driver_uninstall(IR_RMT_CHANNEL);
+    irRingBuffer = nullptr;
+    M5.Power.setExtOutput(false, m5::ext_none);
+    M5.Speaker.begin();
     return false;
   }
 
-  rmt_rx_event_callbacks_t cbs = {
-      .on_recv_done = irRxDoneCallback,
-  };
-  if (rmt_rx_register_event_callbacks(irRxChannel, &cbs, nullptr) != ESP_OK ||
-      rmt_enable(irRxChannel) != ESP_OK) {
-    rmt_del_channel(irRxChannel);
-    irRxChannel = nullptr;
-    return false;
-  }
-
-  irRxDone = false;
-  irSymbolCount = 0;
   irHasFrame = false;
+  irFrameValid = false;
+  irRepeatFrame = false;
+  irSymbolCount = 0;
   irActive = true;
-  startIrReceive();
   return true;
 }
 
 void stopIrAnalyzer() {
   if (!irActive) return;
-  if (irRxChannel) {
-    rmt_disable(irRxChannel);
-    rmt_del_channel(irRxChannel);
-    irRxChannel = nullptr;
-  }
+  rmt_rx_stop(IR_RMT_CHANNEL);
+  rmt_driver_uninstall(IR_RMT_CHANNEL);
+  irRingBuffer = nullptr;
   M5.Power.setExtOutput(false, m5::ext_none);
   M5.Speaker.begin();
   irActive = false;
-  irRxDone = false;
 }
 
-void processIrFrame() {
-  if (!irActive || !irRxDone) return;
-  irRxDone = false;
+bool pollIrFrame() {
+  if (!irActive || !irRingBuffer) return false;
 
+  size_t rxSize = 0;
+  auto* items = static_cast<rmt_item32_t*>(xRingbufferReceive(irRingBuffer, &rxSize, 0));
+  if (!items) return false;
+
+  const size_t count = rxSize / sizeof(rmt_item32_t);
   uint32_t raw = 0;
   bool repeat = false;
-  bool valid = decodeNEC(irSymbols, irSymbolCount, &raw, &repeat);
+  bool valid = decodeNEC(items, count, &raw, &repeat);
 
+  irSymbolCount = count;
   irHasFrame = true;
   irFrameValid = valid;
   irRepeatFrame = repeat;
@@ -853,7 +840,8 @@ void processIrFrame() {
     irCommand = (raw >> 16) & 0xFF;
   }
 
-  startIrReceive();
+  vRingbufferReturnItem(irRingBuffer, items);
+  return true;
 }
 
 void renderIRAnalyzer() {
@@ -863,7 +851,7 @@ void renderIRAnalyzer() {
   fontSmall();
   frame.setTextColor(irActive ? OK : WARN, BG);
   frame.setCursor(8, 69);
-  frame.print(irActive ? "Listening on GPIO42 / RMT" : "Receiver unavailable");
+  frame.print(irActive ? "Listening GPIO42 / RMT" : "Receiver unavailable");
 
   if (!irHasFrame) {
     fontUI();
@@ -910,6 +898,8 @@ void renderIRAnalyzer() {
   drawFooter("A CLEAR", "B BACK");
   present();
 }
+
+// ----- Screen saver -----
 
 void renderDefaultScreensaver() {
   beginFrame();
@@ -1099,10 +1089,7 @@ void periodicRefresh() {
   if (!inApp) return;
 
   if (current == AppId::IRAnalyzer) {
-    if (irRxDone) {
-      processIrFrame();
-      renderIRAnalyzer();
-    }
+    if (pollIrFrame()) renderIRAnalyzer();
     return;
   }
 
