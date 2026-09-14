@@ -1,6 +1,8 @@
 #include <Arduino.h>
 #include <M5Unified.h>
 #include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
 #include <math.h>
 #include <time.h>
 
@@ -23,6 +25,7 @@ constexpr uint16_t MUTED = TFT_DARKGREY;
 constexpr uint16_t ACCENT = TFT_CYAN;
 constexpr uint16_t OK = TFT_GREEN;
 constexpr uint16_t WARN = TFT_YELLOW;
+constexpr const char* SETUP_AP_NAME = "PocketNexus-Setup";
 
 struct AppEntry {
   const char* shortName;
@@ -74,6 +77,11 @@ float gameY = 68.0f;
 float gameVx = 0.0f;
 float gameVy = 0.0f;
 
+WebServer setupServer(80);
+bool setupPortalActive = false;
+String configuredSsid;
+String configuredPassword;
+
 void clearScreen() {
   M5.Display.fillScreen(BG);
   M5.Display.setTextColor(FG, BG);
@@ -89,7 +97,7 @@ void drawHeader(const char* title) {
 }
 
 bool hasWiFiConfig() {
-  return strlen(PN_WIFI_SSID) > 0;
+  return configuredSsid.length() > 0;
 }
 
 bool wifiConnected() {
@@ -126,10 +134,103 @@ void drawFooter(const char* left = "A: next/action", const char* right = "B: bac
   M5.Display.setTextColor(FG, BG);
 }
 
-void connectWiFi() {
-  if (!hasWiFiConfig()) return;
+void loadWiFiCredentials() {
+  if (strlen(PN_WIFI_SSID) > 0) {
+    configuredSsid = PN_WIFI_SSID;
+    configuredPassword = PN_WIFI_PASSWORD;
+    return;
+  }
+
+  Preferences prefs;
+  if (prefs.begin("pocket-nexus", true)) {
+    configuredSsid = prefs.getString("ssid", "");
+    configuredPassword = prefs.getString("pass", "");
+    prefs.end();
+  }
+}
+
+void saveWiFiCredentials(const String& ssid, const String& password) {
+  Preferences prefs;
+  if (prefs.begin("pocket-nexus", false)) {
+    prefs.putString("ssid", ssid);
+    prefs.putString("pass", password);
+    prefs.end();
+  }
+}
+
+String setupPageHtml() {
+  String page;
+  page.reserve(1800);
+  page += F("<!doctype html><html><head><meta charset='utf-8'>");
+  page += F("<meta name='viewport' content='width=device-width,initial-scale=1'>");
+  page += F("<title>Pocket Nexus Setup</title><style>");
+  page += F("body{font-family:system-ui;background:#0b0d10;color:#f5f7fa;margin:0;padding:24px}");
+  page += F("main{max-width:520px;margin:auto;background:#151920;padding:24px;border-radius:18px}");
+  page += F("input,button{box-sizing:border-box;width:100%;font-size:17px;padding:13px;margin:8px 0;border-radius:10px}");
+  page += F("input{background:#0f1318;color:white;border:1px solid #39434f}button{border:0;background:#35d0ba;color:#07110f;font-weight:700}");
+  page += F("p{color:#aeb8c5;line-height:1.5}</style></head><body><main>");
+  page += F("<h2>Pocket Nexus Wi-Fi</h2><p>Enter your 2.4 GHz Wi-Fi credentials. They are stored only on this StickS3.</p>");
+  page += F("<form method='post' action='/save'><input name='ssid' maxlength='32' placeholder='Wi-Fi SSID' required>");
+  page += F("<input name='password' type='password' maxlength='64' placeholder='Wi-Fi password'>");
+  page += F("<button type='submit'>Save & Restart</button></form>");
+  page += F("<p>Setup hotspot: PocketNexus-Setup<br>Address: 192.168.4.1</p></main></body></html>");
+  return page;
+}
+
+void startSetupPortal() {
+  if (setupPortalActive) return;
+
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(SETUP_AP_NAME);
+  setupPortalActive = true;
+
+  setupServer.on("/", HTTP_GET, []() {
+    setupServer.send(200, "text/html; charset=utf-8", setupPageHtml());
+  });
+
+  setupServer.on("/save", HTTP_POST, []() {
+    const String ssid = setupServer.arg("ssid");
+    const String password = setupServer.arg("password");
+    if (ssid.length() == 0) {
+      setupServer.send(400, "text/plain", "SSID is required");
+      return;
+    }
+    saveWiFiCredentials(ssid, password);
+    setupServer.send(200, "text/html; charset=utf-8",
+                     "<html><body style='font-family:system-ui'><h2>Saved</h2><p>Pocket Nexus is restarting...</p></body></html>");
+    delay(700);
+    ESP.restart();
+  });
+
+  setupServer.onNotFound([]() {
+    setupServer.sendHeader("Location", "/", true);
+    setupServer.send(302, "text/plain", "");
+  });
+
+  setupServer.begin();
+
+  clearScreen();
+  drawHeader("Wi-Fi Setup");
+  M5.Display.setTextColor(WARN, BG);
+  M5.Display.setCursor(8, 34);
+  M5.Display.print("Connect phone to:");
+  M5.Display.setTextColor(ACCENT, BG);
+  M5.Display.setCursor(8, 52);
+  M5.Display.print(SETUP_AP_NAME);
+  M5.Display.setTextColor(FG, BG);
+  M5.Display.setCursor(8, 74);
+  M5.Display.print("Open 192.168.4.1");
+  M5.Display.setTextColor(MUTED, BG);
+  M5.Display.setCursor(8, 96);
+  M5.Display.print("Then save Wi-Fi + restart");
+  delay(1200);
+}
+
+bool tryWiFiConnection() {
+  if (!hasWiFiConfig()) return false;
+
   WiFi.mode(WIFI_STA);
-  WiFi.begin(PN_WIFI_SSID, PN_WIFI_PASSWORD);
+  WiFi.begin(configuredSsid.c_str(), configuredPassword.c_str());
 
   clearScreen();
   drawHeader("Pocket Nexus");
@@ -142,8 +243,16 @@ void connectWiFi() {
     delay(250);
   }
 
-  if (wifiConnected()) {
-    configTzTime(PN_TIMEZONE, "pool.ntp.org", "time.nist.gov");
+  if (!wifiConnected()) return false;
+
+  configTzTime(PN_TIMEZONE, "pool.ntp.org", "time.nist.gov");
+  return true;
+}
+
+void connectWiFi() {
+  loadWiFiCredentials();
+  if (!tryWiFiConnection()) {
+    startSetupPortal();
   }
 }
 
@@ -192,6 +301,8 @@ void renderDashboard() {
   M5.Display.setCursor(10, 84);
   if (wifiConnected()) {
     M5.Display.printf("Wi-Fi  %d dBm", WiFi.RSSI());
+  } else if (setupPortalActive) {
+    M5.Display.print("Wi-Fi setup AP active");
   } else {
     M5.Display.print("Wi-Fi  offline");
   }
@@ -297,9 +408,9 @@ void renderCountdown() {
     M5.Display.print("Not configured");
     M5.Display.setTextColor(MUTED, BG);
     M5.Display.setCursor(10, 78);
-    M5.Display.print("Set PN_COUNTDOWN_EPOCH");
+    M5.Display.print("Remote config planned");
     M5.Display.setCursor(10, 92);
-    M5.Display.print("in include/secrets.h");
+    M5.Display.print("for network builds");
   } else {
     const time_t now = time(nullptr);
     long long delta = static_cast<long long>(PN_COUNTDOWN_EPOCH) - static_cast<long long>(now);
@@ -338,18 +449,8 @@ void renderWiFiMonitor() {
   clearScreen();
   drawHeader("Wi-Fi Monitor");
   M5.Display.setCursor(8, 32);
-  if (!hasWiFiConfig()) {
-    M5.Display.setTextColor(WARN, BG);
-    M5.Display.print("No Wi-Fi credentials");
-    M5.Display.setTextColor(MUTED, BG);
-    M5.Display.setCursor(8, 52);
-    M5.Display.print("Create include/secrets.h");
-  } else if (!wifiConnected()) {
-    M5.Display.setTextColor(WARN, BG);
-    M5.Display.print("Disconnected");
-    M5.Display.setCursor(8, 52);
-    M5.Display.print(PN_WIFI_SSID);
-  } else {
+
+  if (wifiConnected()) {
     M5.Display.setTextColor(OK, BG);
     M5.Display.print("Connected");
     M5.Display.setTextColor(FG, BG);
@@ -361,6 +462,25 @@ void renderWiFiMonitor() {
     M5.Display.printf("IP: %s", WiFi.localIP().toString().c_str());
     M5.Display.setCursor(8, 98);
     M5.Display.printf("Ch: %d", WiFi.channel());
+  } else if (setupPortalActive) {
+    M5.Display.setTextColor(WARN, BG);
+    M5.Display.print("Setup portal active");
+    M5.Display.setTextColor(FG, BG);
+    M5.Display.setCursor(8, 52);
+    M5.Display.print(SETUP_AP_NAME);
+    M5.Display.setCursor(8, 70);
+    M5.Display.print("Open: 192.168.4.1");
+    M5.Display.setTextColor(MUTED, BG);
+    M5.Display.setCursor(8, 90);
+    M5.Display.print("Credentials stay on-device");
+  } else if (hasWiFiConfig()) {
+    M5.Display.setTextColor(WARN, BG);
+    M5.Display.print("Disconnected");
+    M5.Display.setCursor(8, 52);
+    M5.Display.print(configuredSsid);
+  } else {
+    M5.Display.setTextColor(WARN, BG);
+    M5.Display.print("No Wi-Fi credentials");
   }
   drawFooter("A: reconnect", "B: menu");
 }
@@ -447,10 +567,14 @@ void handleButtons() {
   }
 
   if (M5.BtnA.wasPressed()) {
-    if (current == AppId::WiFiMonitor && hasWiFiConfig()) {
-      WiFi.disconnect();
-      delay(50);
-      WiFi.begin(PN_WIFI_SSID, PN_WIFI_PASSWORD);
+    if (current == AppId::WiFiMonitor) {
+      if (hasWiFiConfig() && !setupPortalActive) {
+        WiFi.disconnect();
+        delay(50);
+        WiFi.begin(configuredSsid.c_str(), configuredPassword.c_str());
+      } else if (!wifiConnected()) {
+        startSetupPortal();
+      }
     }
     renderCurrent(true);
   }
@@ -479,6 +603,10 @@ void periodicRefresh() {
   }
 }
 
+void serviceSetupPortal() {
+  if (setupPortalActive) setupServer.handleClient();
+}
+
 }  // namespace pn
 
 void setup() {
@@ -503,6 +631,7 @@ void setup() {
 
 void loop() {
   M5.update();
+  pn::serviceSetupPortal();
   pn::handleButtons();
   pn::periodicRefresh();
   delay(5);
