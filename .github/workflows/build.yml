@@ -25,8 +25,11 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install PlatformIO
-        run: pip install --upgrade platformio
+      - name: Install build tools
+        run: pip install --upgrade platformio pillow
+
+      - name: Generate RGB565 screensaver
+        run: python tools/generate_screensaver.py
 
       - name: Build StickS3 firmware
         run: pio run -e m5stack-sticks3
