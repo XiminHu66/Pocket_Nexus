@@ -31,6 +31,9 @@ jobs:
       - name: Generate RGB565 screensaver
         run: python tools/generate_screensaver.py
 
+      - name: Generate v0.9 firmware source
+        run: python tools/generate_v09.py
+
       - name: Build StickS3 firmware
         run: pio run -e m5stack-sticks3
 
