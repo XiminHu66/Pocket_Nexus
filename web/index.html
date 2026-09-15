@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pocket Nexus v0.8 Web Installer</title>
+  <title>Pocket Nexus v0.9 Web Installer</title>
   <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
   <style>
     :root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -14,28 +14,29 @@
 </head>
 <body><main>
   <h1>Pocket Nexus</h1>
-  <p class="sub">M5Stack StickS3 · 浏览器一键烧录 · <span class="badge">v0.8</span></p>
+  <p class="sub">M5Stack StickS3 · 浏览器一键烧录 · <span class="badge">v0.9</span></p>
   <div class="card"><ol>
     <li>使用 USB-C 数据线连接 StickS3。</li>
     <li>需要时长按侧面 Reset 约 2 秒，看到内部绿色 LED 闪烁后松开。</li>
     <li>使用桌面版 Chrome 或 Edge 打开本页。</li>
     <li>点击安装按钮，选择 <code>USB JTAG/serial debug unit</code>。</li>
   </ol></div>
-  <div class="card"><strong>v0.8 更新</strong><ul class="note">
-    <li>“一键乐”扩展到 11 个玩法，同时保留骰子、抛硬币、今日运势、随机新闻、刷新天气和随机股票。</li>
-    <li>新增“今天吃什么”：内置中式 / 亚洲口味和简单家常选项，本地随机，不联网也能用。</li>
-    <li>新增“随机 RSS”：直接读取 RSS Orbit 的 Cloudflare KV 实时缓存，通过 Pocket API 与 RSS Orbit Worker 的 Service Binding 获取内容。</li>
-    <li>新增“30秒挑战”：随机生成一个小运动 / 活动挑战，屏幕实时倒数 30 秒，结束时蜂鸣提示。</li>
-    <li>新增“反应测试”：随机等待后出现“按！”，再次按 A 显示毫秒反应时间；抢跑会提示重新开始。</li>
-    <li>新增“决策轮盘”：候选项不写死，可在安全配置页自行填写，用 <code>|</code> 分隔，例如 <code>日料|中餐|在家做饭</code>。</li>
-    <li>继续保留 v0.7 的水平仪姿态校准、逐像素屏保写屏、精简菜单和 Wi-Fi 后台重连。</li>
+  <div class="card"><strong>v0.9 更新</strong><ul class="note">
+    <li>“一键乐”改成真正的二级菜单：A 下一项、B 打开；进入玩法后 A 触发、B 返回玩法菜单；二级菜单长按 B 返回主菜单。</li>
+    <li>保留 v0.8 的骰子、抛硬币、今日运势、随机新闻、天气、随机股票、今天吃什么、随机 RSS、30 秒挑战、反应测试和决策轮盘。</li>
+    <li>参考 Hackster 的 M5Stick 系列项目新增“专注计时”：25 分钟专注 / 5 分钟休息，支持暂停继续和结束蜂鸣。</li>
+    <li>新增“姿态计时”：利用内置 IMU，倾斜设备选择 5 / 10 / 15 / 25 / 45 分钟，再按 A 开始。</li>
+    <li>新增“声音仪”：使用内置麦克风测相对 RMS / 峰值声级；显示的是相对声级，不冒充校准过的 dBA。</li>
+    <li>新增“附近 Wi-Fi”：仅做被动扫描，显示附近网络数量、最强 SSID、RSSI、信道和是否加密，不包含攻击功能。</li>
+    <li>新增“猜拳”：设备随机出石头 / 剪刀 / 布。</li>
+    <li>继续保留水平仪校准、RGB565 屏保安全写屏、RSS Orbit、Pocket API、Wi-Fi 自动重连等已有功能。</li>
   </ul></div>
-  <div class="card warn"><strong>升级提示：</strong><p class="note">建议选择保留数据 / 不 Erase，这样已保存的 Wi-Fi、事件和水平仪校准数据会继续保留。决策轮盘首次使用会有默认候选项，之后可自行修改。</p></div>
+  <div class="card warn"><strong>升级提示：</strong><p class="note">建议选择保留数据 / 不 Erase，这样已保存的 Wi-Fi、事件、决策轮盘候选项和水平仪校准数据会继续保留。</p></div>
   <esp-web-install-button manifest="manifest.json">
-    <button slot="activate">Connect & Install Pocket Nexus v0.8</button>
+    <button slot="activate">Connect & Install Pocket Nexus v0.9</button>
     <span slot="unsupported">当前浏览器不支持 Web Serial。请使用桌面版 Chrome 或 Edge。</span>
     <span slot="not-allowed">浏览器阻止了串口访问，请确认页面通过 HTTPS 打开。</span>
   </esp-web-install-button>
-  <p class="note">配置 Wi-Fi / 日程 / 决策轮盘：进入“设置”第 1 页，长按侧键 B，连接屏幕显示的 <code>PN-Setup-XXXX</code>，再访问 <code>192.168.4.1</code>。屏保预览仍在“设置”第 2 页长按 A。</p>
+  <p class="note">“一键乐”现在会先进入玩法列表，不再盲切。配置 Wi-Fi / 日程 / 决策轮盘仍然在“设置”第 1 页长按侧键 B；屏保预览在“设置”第 2 页长按 A。</p>
   <p class="note"><a href="https://github.com/XiminHu66/Pocket_Nexus">Source / Pocket_Nexus</a></p>
 </main></body></html>
