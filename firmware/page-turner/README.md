@@ -2,6 +2,10 @@
 
 适用 **M5Stack StickS3 K150**。独立 ESP32-S3 固件，适合 BOOX Leaf 5C 等可接收蓝牙 HID 按键的阅读器。翻页只使用蓝牙，离线可用。
 
+## 网页刷写
+
+用桌面版 Chrome 或 Edge 打开 [BLE 翻页器安装页](https://ximinhu66.github.io/Pocket_Nexus/#page-turner)。用 USB-C 数据线连接 K150，按住电源键至绿灯闪烁后松开，点击「连接并安装 BLE 翻页器」，选择设备串口。安装时保持 `Erase device` 未勾选，以保留设备设置。要切换回来，在同一网页选择「Pocket Nexus」。
+
 ## 配对与翻页
 
 1. StickS3 开机后，首次配对窗口为 90 秒。在 BOOX 的蓝牙设置里连接 **StickS3 Page**。

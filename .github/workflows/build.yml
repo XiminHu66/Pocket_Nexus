@@ -9,12 +9,12 @@ name: Build + Web Flasher
     - platformio.ini
     - web/**
     - tools/**
+    - firmware/page-turner/**
+    - .github/workflows/build.yml
   pull_request: null
   workflow_dispatch: null
 permissions:
   contents: read
-  pages: write
-  id-token: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -33,6 +33,12 @@ jobs:
       run: python tools/generate_v09.py
     - name: Build StickS3 firmware
       run: pio run -e m5stack-sticks3
+    - name: Build BLE page turner firmware
+      uses: espressif/esp-idf-ci-action@9d38657f3d789ca759b2b37aaf5ceffbc42c4f0d # v1
+      with:
+        esp_idf_version: v5.5.2
+        target: esp32s3
+        path: firmware/page-turner
     - name: Create browser-flashable image
       run: |
         mkdir -p dist
@@ -51,23 +57,25 @@ jobs:
       with:
         name: pocket-nexus-firmware
         path: dist/pocket-nexus.bin
-        retention-days: 3
-    - name: Prepare web installer
-      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        retention-days: 1
+    - name: Stage and validate both web installers
       run: |
-        mkdir -p site/firmware
-        cp -R web/. site/
-        cp dist/pocket-nexus.bin site/firmware/pocket-nexus.bin
+        python tools/prepare_web_installer.py \
+          --boot-app0 ~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin
     - name: Upload GitHub Pages artifact
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
       uses: actions/upload-pages-artifact@v3
       with:
         path: site
         retention-days: 1
-    timeout-minutes: 15
+    timeout-minutes: 25
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: build
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -79,4 +87,4 @@ jobs:
     timeout-minutes: 15
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
