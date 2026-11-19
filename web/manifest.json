@@ -6,10 +6,10 @@
     {
       "chipFamily": "ESP32-S3",
       "parts": [
-        {
-          "path": "firmware/pocket-nexus.bin",
-          "offset": 0
-        }
+        { "path": "firmware/pocket-nexus/bootloader.bin", "offset": 0 },
+        { "path": "firmware/pocket-nexus/partitions.bin", "offset": 32768 },
+        { "path": "firmware/pocket-nexus/boot-app0.bin", "offset": 57344 },
+        { "path": "firmware/pocket-nexus/firmware.bin", "offset": 65536 }
       ]
     }
   ]

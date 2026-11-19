@@ -3,40 +3,91 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pocket Nexus v0.9 Web Installer</title>
-  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <title>Pocket Nexus · StickS3 固件更新</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10.5.2/dist/web/install-button.js?module"></script>
+  <script type="module" src="tabs.js"></script>
   <style>
     :root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     body { margin:0; min-height:100vh; display:grid; place-items:center; background:#0b0d10; color:#f5f7fa; }
     main { width:min(680px,calc(100% - 32px)); background:#151920; border:1px solid #2c333d; border-radius:20px; padding:28px; box-sizing:border-box; }
     h1 { margin:0 0 8px; font-size:30px; }.sub{color:#aeb8c5;margin:0 0 26px}.badge{display:inline-block;padding:4px 9px;border-radius:999px;background:#17352f;color:#67e8d0;font-size:13px;font-weight:700}.card{background:#0f1318;border:1px solid #29313b;border-radius:14px;padding:18px;margin:18px 0}.warn{border-color:#66541e;background:#211d0f}ol,ul{line-height:1.8}code{background:#232a33;padding:2px 6px;border-radius:6px}esp-web-install-button{--esp-tools-button-color:#35d0ba;--esp-tools-button-text-color:#07110f;--esp-tools-button-border-radius:12px}button[slot="activate"]{border:0;border-radius:12px;padding:14px 22px;font-size:17px;font-weight:700;background:#35d0ba;color:#07110f;cursor:pointer}.note{color:#aeb8c5;font-size:14px;line-height:1.6}a{color:#65d9ff}
+    body { padding: 24px 0; box-sizing: border-box; }
+    .tabs { display: flex; gap: 6px; margin: 0 0 18px; border-bottom: 1px solid #39424f; }
+    .tab { min-height: 44px; padding: 8px 14px; border: 0; border-bottom: 2px solid transparent;
+      color: #bbc5d1; background: transparent; font: inherit; font-weight: 650; cursor: pointer; }
+    .tab[aria-selected="true"] { border-color: #67e8d0; color: #67e8d0; }
+    .tab:focus-visible, button[slot="activate"]:focus-visible { outline: 2px solid #8de7ff; outline-offset: 2px; }
+    [role="tabpanel"][hidden] { display: none; }
+    h2 { margin: 0 0 8px; font-size: 22px; }
+    h2 .badge { vertical-align: 2px; }
+    ol { padding-left: 1.4rem; margin: 0; }
+    .install { margin: 20px 0 12px; }
+    .links { margin: 25px 0 0; }
+    @media (max-width: 440px) {
+      main { padding: 18px; }
+      .tab { padding-inline: 10px; }
+      h1 { font-size: 26px; }
+    }
   </style>
 </head>
 <body><main>
   <h1>Pocket Nexus</h1>
-  <p class="sub">M5Stack StickS3 · 浏览器一键烧录 · <span class="badge">v0.9</span></p>
-  <div class="card"><ol>
-    <li>使用 USB-C 数据线连接 StickS3。</li>
-    <li>需要时长按侧面 Reset 约 2 秒，看到内部绿色 LED 闪烁后松开。</li>
-    <li>使用桌面版 Chrome 或 Edge 打开本页。</li>
-    <li>点击安装按钮，选择 <code>USB JTAG/serial debug unit</code>。</li>
-  </ol></div>
-  <div class="card"><strong>v0.9 更新</strong><ul class="note">
-    <li>“一键乐”改成真正的二级菜单：A 下一项、B 打开；进入玩法后 A 触发、B 返回玩法菜单；二级菜单长按 B 返回主菜单。</li>
-    <li>保留 v0.8 的骰子、抛硬币、今日运势、随机新闻、天气、随机股票、今天吃什么、随机 RSS、30 秒挑战、反应测试和决策轮盘。</li>
-    <li>参考 Hackster 的 M5Stick 系列项目新增“专注计时”：25 分钟专注 / 5 分钟休息，支持暂停继续和结束蜂鸣。</li>
-    <li>新增“姿态计时”：利用内置 IMU，倾斜设备选择 5 / 10 / 15 / 25 / 45 分钟，再按 A 开始。</li>
-    <li>新增“声音仪”：使用内置麦克风测相对 RMS / 峰值声级；显示的是相对声级，不冒充校准过的 dBA。</li>
-    <li>新增“附近 Wi-Fi”：仅做被动扫描，显示附近网络数量、最强 SSID、RSSI、信道和是否加密，不包含攻击功能。</li>
-    <li>新增“猜拳”：设备随机出石头 / 剪刀 / 布。</li>
-    <li>继续保留水平仪校准、RGB565 屏保安全写屏、RSS Orbit、Pocket API、Wi-Fi 自动重连等已有功能。</li>
-  </ul></div>
-  <div class="card warn"><strong>升级提示：</strong><p class="note">建议选择保留数据 / 不 Erase，这样已保存的 Wi-Fi、事件、决策轮盘候选项和水平仪校准数据会继续保留。</p></div>
-  <esp-web-install-button manifest="manifest.json">
-    <button slot="activate">Connect & Install Pocket Nexus v0.9</button>
-    <span slot="unsupported">当前浏览器不支持 Web Serial。请使用桌面版 Chrome 或 Edge。</span>
-    <span slot="not-allowed">浏览器阻止了串口访问，请确认页面通过 HTTPS 打开。</span>
-  </esp-web-install-button>
-  <p class="note">“一键乐”现在会先进入玩法列表，不再盲切。配置 Wi-Fi / 日程 / 决策轮盘仍然在“设置”第 1 页长按侧键 B；屏保预览在“设置”第 2 页长按 A。</p>
-  <p class="note"><a href="https://github.com/XiminHu66/Pocket_Nexus">Source / Pocket_Nexus</a></p>
+  <p class="sub">M5Stack StickS3 K150 · 浏览器固件更新</p>
+
+  <div class="tabs" role="tablist" aria-label="选择固件">
+    <button class="tab" type="button" id="tab-pocket-nexus" role="tab"
+      aria-selected="true" aria-controls="pocket-nexus">Pocket Nexus</button>
+    <button class="tab" type="button" id="tab-page-turner" role="tab" tabindex="-1"
+      aria-selected="false" aria-controls="page-turner">BLE 翻页器</button>
+  </div>
+  <div class="card">
+    <ol>
+      <li>使用桌面版 Chrome 或 Edge，通过 USB-C 数据线连接 StickS3。</li>
+      <li>按住电源键，看到绿色 LED 闪烁后松开，进入下载模式。</li>
+      <li>点下方安装按钮，选择 <code>USB JTAG/serial debug unit</code>。</li>
+    </ol>
+  </div>
+
+  <section id="pocket-nexus" role="tabpanel" aria-labelledby="tab-pocket-nexus">
+    <h2>Pocket Nexus <span class="badge">v0.9</span></h2>
+    <div class="install">
+      <esp-web-install-button manifest="manifest.json">
+        <button slot="activate">连接并安装 Pocket Nexus</button>
+        <span slot="unsupported">当前浏览器不支持 Web Serial。请使用桌面版 Chrome 或 Edge。</span>
+        <span slot="not-allowed">浏览器阻止了串口访问，请确认页面通过 HTTPS 打开。</span>
+      </esp-web-install-button>
+    </div>
+    <p class="note">在安装对话框中保持 <strong>Erase device</strong> 未勾选，以保留 Wi-Fi 和其他设备设置。</p>
+    <div class="card"><strong>v0.9 更新</strong><ul class="note">
+      <li>“一键乐”改成真正的二级菜单：A 下一项、B 打开；进入玩法后 A 触发、B 返回玩法菜单；二级菜单长按 B 返回主菜单。</li>
+      <li>保留 v0.8 的骰子、抛硬币、今日运势、随机新闻、天气、随机股票、今天吃什么、随机 RSS、30 秒挑战、反应测试和决策轮盘。</li>
+      <li>参考 Hackster 的 M5Stick 系列项目新增“专注计时”：25 分钟专注 / 5 分钟休息，支持暂停继续和结束蜂鸣。</li>
+      <li>新增“姿态计时”：利用内置 IMU，倾斜设备选择 5 / 10 / 15 / 25 / 45 分钟，再按 A 开始。</li>
+      <li>新增“声音仪”：使用内置麦克风测相对 RMS / 峰值声级；显示的是相对声级，不冒充校准过的 dBA。</li>
+      <li>新增“附近 Wi-Fi”：仅做被动扫描，显示附近网络数量、最强 SSID、RSSI、信道和是否加密，不包含攻击功能。</li>
+      <li>新增“猜拳”：设备随机出石头 / 剪刀 / 布。</li>
+      <li>继续保留水平仪校准、RGB565 屏保安全写屏、RSS Orbit、Pocket API、Wi-Fi 自动重连等已有功能。</li>
+    </ul></div>
+    <p class="note">“一键乐”现在会先进入玩法列表，不再盲切。配置 Wi-Fi / 日程 / 决策轮盘仍然在“设置”第 1 页长按侧键 B；屏保预览在“设置”第 2 页长按 A。</p>
+  </section>
+
+  <section id="page-turner" role="tabpanel" aria-labelledby="tab-page-turner" hidden>
+    <h2>BLE 翻页器 <span class="badge">v0.1.0</span></h2>
+    <p class="note">安装后设备启动为独立的 BLE 翻页器。回到 Pocket Nexus 标签可重新安装原固件。</p>
+    <div class="install">
+      <esp-web-install-button manifest="manifest-page-turner.json">
+        <button slot="activate">连接并安装 BLE 翻页器</button>
+        <span slot="unsupported">当前浏览器不支持 Web Serial。请使用桌面版 Chrome 或 Edge。</span>
+        <span slot="not-allowed">浏览器阻止了串口访问，请通过 HTTPS 打开本页。</span>
+      </esp-web-install-button>
+    </div>
+    <p class="note">在安装对话框中保持 <strong>Erase device</strong> 未勾选，以保留原设置和已绑定设备。</p>
+    <div class="card">
+      <strong>安装后配对</strong>
+      <p class="note">在 BOOX 的蓝牙设置里连接 <strong>StickS3 Page</strong>。正面键下一页，侧面键上一页。阅读 App 提供「音量键翻页」时，先开启该设置。</p>
+      <a href="https://github.com/XiminHu66/Pocket_Nexus/blob/main/firmware/page-turner/README.md">配对、键位设置与实机验收</a>
+    </div>
+  </section>
+
+  <p class="note links"><a href="https://github.com/XiminHu66/Pocket_Nexus">项目源代码</a></p>
 </main></body></html>
