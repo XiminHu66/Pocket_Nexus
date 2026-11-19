@@ -2,6 +2,8 @@
 
 Pocket Nexus is a modular firmware project for the **M5Stack StickS3**. One firmware image provides a portrait launcher containing dashboards, connected-data pages, sensor utilities, IR tools, a screen saver, and mini tools.
 
+For the standalone offline BLE page turner for StickS3 K150, see [StickS3 BLE Page Turner](firmware/page-turner/README.md).
+
 ## Install without a local development environment
 
 Open the browser installer in **Chrome or Edge**:
