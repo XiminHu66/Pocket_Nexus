@@ -1,15 +1,15 @@
 {
   "name": "StickS3 BLE Page Turner",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "new_install_prompt_erase": true,
   "new_install_improv_wait_time": 0,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
       "parts": [
-        { "path": "firmware/page-turner/0.3.0/bootloader.bin", "offset": 0 },
-        { "path": "firmware/page-turner/0.3.0/partition-table.bin", "offset": 32768 },
-        { "path": "firmware/page-turner/0.3.0/sticks3-page-turner.bin", "offset": 65536 }
+        { "path": "firmware/page-turner/0.3.1/bootloader.bin", "offset": 0 },
+        { "path": "firmware/page-turner/0.3.1/partition-table.bin", "offset": 32768 },
+        { "path": "firmware/page-turner/0.3.1/sticks3-page-turner.bin", "offset": 65536 }
       ]
     }
   ]

@@ -127,12 +127,34 @@ bool page_host_can_send(const page_host_book_t *book, uint8_t target,
     return encrypted && bonded && target < PAGE_HOST_COUNT && page_host_find(book, address) == target;
 }
 
+bool page_hosts_migrate_iphone(page_host_book_t *book)
+{
+    bool changed = false;
+    for (uint8_t slot = 0; slot < PAGE_HOST_COUNT; ++slot) {
+        page_host_t *host = &book->hosts[slot];
+        if (host->label != HOST_IPHONE) {
+            continue;
+        }
+        uint8_t profile = host->settings & ~PAGE_SETTINGS_INVERT;
+        uint8_t direction = host->settings & PAGE_SETTINGS_INVERT;
+        if (profile == PROFILE_MANGA) {
+            host->settings = PROFILE_IPHONE_HORIZONTAL | direction;
+            changed = true;
+        } else if (profile == PROFILE_VIDEO_WHEEL || profile == PROFILE_VIDEO_KEYS ||
+                   profile == PROFILE_MANGA_SCROLL) {
+            host->settings = PROFILE_IPHONE_VERTICAL | direction;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 uint8_t page_host_label_settings(page_host_label_t label, uint8_t fallback)
 {
     switch (label) {
     case HOST_PC: return PROFILE_PPT;
     case HOST_BOOX: return PROFILE_BOOX;
-    case HOST_IPHONE: return PROFILE_VIDEO_WHEEL;
+    case HOST_IPHONE: return PROFILE_IPHONE_VERTICAL;
     default: return fallback;
     }
 }

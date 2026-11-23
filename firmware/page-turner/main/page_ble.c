@@ -22,6 +22,7 @@ enum {
     RELEASE_MS = 30, RELEASE_RETRY_MS = 15, MAX_RELEASE_TRIES = 4,
     REQUEST_PROFILE = 0x07, REQUEST_INVERT = 0x08, REQUEST_PREVIOUS = 0x10, REQUEST_VALID = 0x20,
     SESSION_SHIFT = 8, CMD_RETRY = 1, CMD_BATTERY = 2,
+    APPEARANCE_HID = 0x03c0, APPEARANCE_KEYBOARD = 0x03c1,
 };
 
 _Static_assert(PROFILE_COUNT <= REQUEST_PROFILE + 1, "HID request profile must fit");
@@ -92,6 +93,9 @@ static uint8_t pair_slot = PAGE_HOST_NONE;
 static page_host_label_t pair_label;
 static unsigned subscriptions, release_tries;
 static page_report_t active_report;
+static page_swipe_direction_t active_swipe;
+static unsigned swipe_step;
+static uint8_t swipe_settings;
 static bool encrypted, suspended, synced, initialized, manual_window, storage_failed;
 
 static int on_gap(struct ble_gap_event *event, void *arg);
@@ -260,7 +264,7 @@ static ble_addr_t ble_address(uint8_t slot)
 
 static void save_host_book(void)
 {
-    esp_err_t err = nvs_set_blob(host_store, "hosts_v1", &book, sizeof(book));
+    esp_err_t err = nvs_set_blob(host_store, "hosts_v2", &book, sizeof(book));
     if (err == ESP_OK) {
         err = nvs_commit(host_store);
     }
@@ -291,7 +295,12 @@ static bool load_hosts(void)
     page_hosts_init(&book, legacy_settings);
     size_t size = sizeof(book);
     page_host_book_t saved;
-    esp_err_t err = nvs_get_blob(host_store, "hosts_v1", &saved, &size);
+    esp_err_t err = nvs_get_blob(host_store, "hosts_v2", &saved, &size);
+    bool legacy_book = err == ESP_ERR_NVS_NOT_FOUND;
+    if (legacy_book) {
+        size = sizeof(book);
+        err = nvs_get_blob(host_store, "hosts_v1", &saved, &size);
+    }
     if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND && err != ESP_ERR_NVS_INVALID_LENGTH) {
         ESP_LOGE(TAG, "Load hosts: %s", esp_err_to_name(err));
         return false;
@@ -299,6 +308,9 @@ static bool load_hosts(void)
     bool valid = err == ESP_OK && size == sizeof(saved) && page_hosts_valid(&saved);
     if (valid) {
         book = saved;
+        if (legacy_book) {
+            page_hosts_migrate_iphone(&book);
+        }
     }
     // Reconcile after power loss between persisting a bond and saving its slot.
     uint8_t present = 0;
@@ -320,7 +332,7 @@ static bool load_hosts(void)
             page_host_add(&book, page_host_first_free(&book), &address, HOST_OTHER, book.fallback);
         }
     }
-    if (!valid || memcmp(&saved, &book, sizeof(book)) != 0) {
+    if (legacy_book || !valid || memcmp(&saved, &book, sizeof(book)) != 0) {
         save_host_book();
     }
     return true;
@@ -359,12 +371,17 @@ static void advertise(struct ble_npl_event *event)
         return;
     }
 
+    // Present the composite HID identity to iPhone and retain the existing
+    // keyboard appearance for all other device slots.
+    bool iphone = (adding ? pair_label : book.hosts[target].label) == HOST_IPHONE;
+    uint16_t appearance = iphone ? APPEARANCE_HID : APPEARANCE_KEYBOARD;
+    ble_svc_gap_device_appearance_set(appearance);
     struct ble_hs_adv_fields fields = {
         .flags = BLE_HS_ADV_F_BREDR_UNSUP | (adding ? BLE_HS_ADV_F_DISC_GEN : 0),
         .name = (const uint8_t *)PAGE_BLE_NAME,
         .name_len = sizeof(PAGE_BLE_NAME) - 1,
         .name_is_complete = 1,
-        .appearance = 0x03c1,
+        .appearance = appearance,
         .appearance_is_present = 1,
         .uuids16 = (ble_uuid16_t[]) { BLE_UUID16_INIT(0x1812) },
         .num_uuids16 = 1,
@@ -424,6 +441,12 @@ static int notify(uint16_t handle, const uint8_t *bytes, uint8_t size)
     return buffer == NULL ? BLE_HS_ENOMEM : ble_gatts_notify_custom(conn, handle, buffer);
 }
 
+static void schedule_report(uint8_t delay_ms)
+{
+    release_at = now_ms() + delay_ms;
+    ble_npl_callout_reset(&release_timer, ble_npl_time_ms_to_ticks32(delay_ms));
+}
+
 static void on_release(struct ble_npl_event *event)
 {
     (void)event;
@@ -435,14 +458,38 @@ static void on_release(struct ble_npl_event *event)
         ble_npl_callout_reset(&release_timer, ble_npl_time_ms_to_ticks32((uint32_t)remaining + 5));
         return;
     }
+    if (active_swipe != SWIPE_NONE) {
+        uint8_t frame[REPORT_MOUSE_SIZE];
+        uint8_t delay;
+        if (encrypted && !transition && !suspended && swipe_settings == current_settings() &&
+            (subscriptions & report_flag(REPORT_MOUSE)) &&
+            page_swipe_frame(active_swipe, swipe_step, frame, &delay)) {
+            int rc = notify(input_handles[REPORT_MOUSE], frame, sizeof(frame));
+            if (rc == 0) {
+                active_report.bytes[0] = frame[0];
+                ++swipe_step;
+                release_tries = 0;
+                schedule_report(delay);
+                return;
+            }
+            if (++release_tries < MAX_RELEASE_TRIES) {
+                schedule_report(RELEASE_RETRY_MS);
+                return;
+            }
+            ESP_LOGW(TAG, "iPhone pointer notify failed: %d", rc);
+        }
+        // Also release when a mode change or link-state change interrupts the drag.
+        active_swipe = SWIPE_NONE;
+        release_tries = 0;
+    }
     uint8_t zeros[REPORT_KEYBOARD_SIZE] = {0};
     int rc = notify(input_handles[active_report.id], zeros, active_report.size);
     if (rc != 0 && ++release_tries < MAX_RELEASE_TRIES) {
-        release_at = now_ms() + RELEASE_RETRY_MS;
-        ble_npl_callout_reset(&release_timer, ble_npl_time_ms_to_ticks32(RELEASE_RETRY_MS));
+        schedule_report(RELEASE_RETRY_MS);
         return;
     }
     active_report = (page_report_t){0};
+    active_swipe = SWIPE_NONE;
     atomic_store(&pending_page, 0);
     if (rc != 0) {
         ESP_LOGW(TAG, "Release notify failed: %d", rc);
@@ -540,6 +587,7 @@ static void change_host(unsigned request)
         notify(input_handles[active_report.id], zeros, active_report.size);
         ble_npl_callout_stop(&release_timer);
         active_report = (page_report_t){0};
+        active_swipe = SWIPE_NONE;
     }
     atomic_store(&pending_page, 0);
     if (conn == BLE_HS_CONN_HANDLE_NONE) {
@@ -644,6 +692,7 @@ static int on_gap(struct ble_gap_event *event, void *arg)
         conn = BLE_HS_CONN_HANDLE_NONE;
         subscriptions = 0;
         active_report = (page_report_t){0};
+        active_swipe = SWIPE_NONE;
         encrypted = suspended = false;
         atomic_store(&pending_page, 0);
         if (transition) {
@@ -763,28 +812,36 @@ static void on_command(struct ble_npl_event *event)
     if (command == 0 || active_report.id != 0) {
         return;
     }
-    page_report_t report = page_report_for((page_profile_t)(command & REQUEST_PROFILE),
-                                           (command & REQUEST_INVERT) != 0,
-                                           (command & REQUEST_PREVIOUS) ? PAGE_PREV : PAGE_NEXT);
-    if (report.id == 0 || !encrypted || transition || suspended ||
-        (command & (REQUEST_PROFILE | REQUEST_INVERT)) !=
-            ((current_settings() & ~PAGE_SETTINGS_INVERT) |
-             ((current_settings() & PAGE_SETTINGS_INVERT) ? REQUEST_INVERT : 0)) ||
-        !(subscriptions & report_flag(report.id)) ||
-        command >> SESSION_SHIFT != session ||
-        notify(input_handles[report.id], report.bytes, report.size) != 0) {
+    page_profile_t profile = (page_profile_t)(command & REQUEST_PROFILE);
+    bool invert = (command & REQUEST_INVERT) != 0;
+    page_action_t action = (command & REQUEST_PREVIOUS) ? PAGE_PREV : PAGE_NEXT;
+    page_swipe_direction_t swipe = page_swipe_for(profile, invert, action);
+    page_report_t report = page_report_for(profile, invert, action);
+    uint8_t report_id = swipe == SWIPE_NONE ? report.id : REPORT_MOUSE;
+    uint8_t settings = profile | (invert ? PAGE_SETTINGS_INVERT : 0);
+    if (report_id == 0 || !encrypted || transition || suspended || settings != current_settings() ||
+        !(subscriptions & report_flag(report_id)) || command >> SESSION_SHIFT != session) {
         atomic_store(&pending_page, 0);
         return;
     }
-    if (report.id == REPORT_MOUSE) {
+    if (swipe != SWIPE_NONE) {
+        active_report = (page_report_t){ .id = REPORT_MOUSE, .size = REPORT_MOUSE_SIZE };
+        active_swipe = swipe;
+        swipe_step = 0;
+        swipe_settings = settings;
+        release_tries = 0;
+        release_at = now_ms();
+        on_release(NULL);
+        return;
+    }
+    if (notify(input_handles[report.id], report.bytes, report.size) != 0 || report.id == REPORT_MOUSE) {
         // Relative wheel movement is a one-shot report with no pressed buttons.
         atomic_store(&pending_page, 0);
         return;
     }
     active_report = report;
     release_tries = 0;
-    release_at = now_ms() + RELEASE_MS;
-    ble_npl_callout_reset(&release_timer, ble_npl_time_ms_to_ticks32(RELEASE_MS));
+    schedule_report(RELEASE_MS);
 }
 
 static void on_reset(int reason)
@@ -797,6 +854,7 @@ static void on_reset(int reason)
     conn = BLE_HS_CONN_HANDLE_NONE;
     subscriptions = 0;
     active_report = (page_report_t){0};
+    active_swipe = SWIPE_NONE;
     publish(BLE_STARTING);
     atomic_store(&pending_page, 0);
 }
@@ -858,7 +916,7 @@ esp_err_t page_ble_start(void)
     ble_svc_gatt_init();
     ble_svc_bas_init();
     ble_svc_gap_device_name_set(PAGE_BLE_NAME);
-    ble_svc_gap_device_appearance_set(0x03c1);
+    ble_svc_gap_device_appearance_set(APPEARANCE_KEYBOARD);
     if (ble_gatts_count_cfg(services) != 0 || ble_gatts_add_svcs(services) != 0) {
         nimble_port_deinit();
         nvs_close(host_store);
@@ -948,8 +1006,9 @@ void page_ble_set_battery(unsigned percent)
 bool page_ble_send(uint32_t expected_session, page_profile_t profile, bool invert, page_action_t action)
 {
     page_ble_status_t status = page_ble_status();
-    page_report_t report = page_report_for(profile, invert, action);
-    if (report.id == 0 || status.state != BLE_CONNECTED || !(status.reports & report_flag(report.id)) ||
+    uint8_t report_id = page_swipe_for(profile, invert, action) == SWIPE_NONE ?
+                        page_report_for(profile, invert, action).id : REPORT_MOUSE;
+    if (report_id == 0 || status.state != BLE_CONNECTED || !(status.reports & report_flag(report_id)) ||
         status.session != expected_session || atomic_load(&pending_host) != 0 ||
         status.settings != ((unsigned)profile | (invert ? PAGE_SETTINGS_INVERT : 0))) {
         return false;
