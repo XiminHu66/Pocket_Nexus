@@ -57,27 +57,55 @@ static void test_pairing_chord(void)
     assert(page_buttons_poll(&buttons, 0, 8150) == PAGE_NONE);
 }
 
+static void test_mode_chord(void)
+{
+    page_buttons_t buttons = {0};
+    assert(page_buttons_poll(&buttons, KEYS_BOTH, 100) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEYS_BOTH, 125) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEYS_BOTH, 724) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEYS_BOTH, 725) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEY_FRONT, 900) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEY_FRONT, 925) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, 0, 950) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, 0, 975) == PAGE_MODE_GESTURE);
+    assert(page_buttons_poll(&buttons, 0, 1000) == PAGE_NONE);
+
+    assert(page_buttons_poll(&buttons, KEY_SIDE, 1050) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEY_SIDE, 1075) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, 0, 1100) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, 0, 1125) == PAGE_PREV);
+}
+
 static void test_reports(void)
 {
-    const uint8_t next_keys[] = { 2, 0x4e, 0x4f };
-    const uint8_t prev_keys[] = { 1, 0x4b, 0x50 };
-    for (page_profile_t profile = PROFILE_VOLUME; profile < PROFILE_COUNT; ++profile) {
+    static const struct {
+        uint8_t id, size, key_index, next, prev;
+    } expected[PROFILE_COUNT] = {
+        [PROFILE_BOOX] = { REPORT_CONSUMER, 1, 0, 2, 1 },
+        [PROFILE_PPT] = { REPORT_KEYBOARD, 8, 2, 0x4e, 0x4b },
+        [PROFILE_MANGA] = { REPORT_KEYBOARD, 8, 2, 0x4f, 0x50 },
+        [PROFILE_VIDEO_KEYS] = { REPORT_KEYBOARD, 8, 2, 0x51, 0x52 },
+        [PROFILE_VIDEO_WHEEL] = { REPORT_MOUSE, 4, 3, 0xfd, 3 },
+        [PROFILE_MANGA_SCROLL] = { REPORT_KEYBOARD, 8, 2, 0x4e, 0x4b },
+    };
+    for (page_profile_t profile = PROFILE_BOOX; profile < PROFILE_COUNT; ++profile) {
         for (unsigned inverted = 0; inverted <= 1; ++inverted) {
             for (page_action_t action = PAGE_NEXT; action <= PAGE_PREV; ++action) {
-                bool volume = profile == PROFILE_VOLUME;
-                unsigned key_index = volume ? 0 : 2;
                 page_report_t report = page_report_for(profile, inverted, action);
-                assert(report.id == (volume ? REPORT_CONSUMER : REPORT_KEYBOARD));
-                assert(report.size == (volume ? 1 : 8));
-                const uint8_t *keys = ((action == PAGE_NEXT) != inverted) ? next_keys : prev_keys;
+                assert(report.id == expected[profile].id);
+                assert(report.size == expected[profile].size);
+                uint8_t key = ((action == PAGE_NEXT) != inverted) ?
+                              expected[profile].next : expected[profile].prev;
                 for (unsigned i = 0; i < sizeof(report.bytes); ++i) {
-                    assert(report.bytes[i] == (i == key_index ? keys[profile] : 0));
+                    assert(report.bytes[i] == (i == expected[profile].key_index ? key : 0));
                 }
             }
         }
     }
-    assert(page_report_for(PROFILE_VOLUME, false, PAGE_NONE).id == 0);
-    assert(page_report_for(PROFILE_VOLUME, false, PAGE_PAIR_GESTURE).id == 0);
+    assert(PROFILE_BOOX == 0 && PROFILE_PPT == 1 && PROFILE_MANGA == 2);
+    assert(page_report_for(PROFILE_BOOX, false, PAGE_NONE).id == 0);
+    assert(page_report_for(PROFILE_PPT, false, PAGE_MODE_GESTURE).id == 0);
+    assert(page_report_for(PROFILE_BOOX, false, PAGE_PAIR_GESTURE).id == 0);
     assert(page_report_for(PROFILE_COUNT, false, PAGE_NEXT).id == 0);
 }
 
@@ -86,7 +114,8 @@ int main(void)
     test_button_taps();
     test_hold_and_clock_wrap();
     test_pairing_chord();
+    test_mode_chord();
     test_reports();
-    puts("PASS: 200 simulated taps, debounce, hold, pairing chord, timer wrap, and all HID mappings");
+    puts("PASS: 200 simulated taps, debounce, hold, mode / pairing chords, timer wrap, and all HID mappings");
     return 0;
 }

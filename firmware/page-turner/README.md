@@ -1,69 +1,58 @@
 # StickS3 BLE 翻页器
 
-适用 **M5Stack StickS3 K150**。独立 ESP32-S3 固件，适合 BOOX Leaf 5C 等可接收蓝牙 HID 按键的阅读器。翻页只使用蓝牙，离线可用。
+适用 **M5Stack StickS3 K150**。通过蓝牙连接 BOOX、电脑或手机，四种模式都可以在 StickS3 上切换。
 
 ## 网页刷写
 
-用桌面版 Chrome 或 Edge 打开 [BLE 翻页器安装页](https://ximinhu66.github.io/Pocket_Nexus/#page-turner)。用 USB-C 数据线连接 K150，按住电源键至绿灯闪烁后松开，点击「连接并安装 BLE 翻页器」，选择设备串口。安装时保持 `Erase device` 未勾选，以保留设备设置。要切换回来，在同一网页选择「Pocket Nexus」。
+用桌面版 Chrome 或 Edge 打开 [BLE 翻页器安装页](https://ximinhu66.github.io/Pocket_Nexus/#page-turner)。用 USB-C 数据线连接 K150，按住电源键至绿灯闪烁后松开，点击「连接并安装 BLE 翻页器」，选择设备串口。安装时保持 `Erase device` 未勾选，以保留设备设置。要切换回多功能固件，在同一网页选择「Pocket Nexus」。
 
-## 配对与翻页
+## 模式与键位
 
-1. StickS3 开机后，首次配对窗口为 90 秒。在 BOOX 的蓝牙设置里连接 **StickS3 Page**。
-2. 打开你常用的阅读 App。如果该 App 有「音量键翻页」，先打开它。默认配置用音量减键翻下一页、音量加键翻上一页。
-3. 正面 **A / KEY1** 翻下一页，侧面 **B / KEY2** 翻上一页。松开按键时翻页。按住单键只翻一次，电源键保留原本的硬件功能。
-4. 如果 App 调整了音量或没有翻页，从 USB 串口试 `profile page`，然后试 `profile arrow`。如果方向反了，输入 `invert on`。
+同时按住正面 **A** 和侧面 **B** 约 1 秒后松开。**A** 在菜单中循环选择，**B** 确认。MANGA 和 VIDEO 打开后有两种输入方式，同样用 A 和 B 操作。再按一次双键组合可以退出，15 秒无操作也会退出。确认后立即生效，重启会记住上次选择。
 
-蓝牙短暂断线时会尝试重连已绑定的阅读器，最多广播 60 秒。显示 `DISCONNECTED` 后短按 A 或 B 可再试。连接前按下的键只用于恢复连接，连接成功后重新按一次翻页。第一次配对超时后，同时长按 A+B 约 5 秒可重新打开配对窗口。
+| 模式 | 正面 A | 侧面 B | 使用方式 |
+| --- | --- | --- | --- |
+| BOOX | 音量减 | 音量加 | 在 Leaf 5C 的 Legado 或其他阅读 App 中打开音量键翻页 |
+| PPT | Page Down | Page Up | 在电脑上先进入 PowerPoint 放映，再用两键切页 |
+| MANGA → Page arrows | 右方向键 | 左方向键 | 在支持左右键翻页的分页漫画阅读器中使用 |
+| MANGA → Page Up / Down | Page Down | Page Up | 在长条漫画网页先点一下内容区，再按一屏上下滚动 |
+| VIDEO → PC arrow keys | 下方向键 | 上方向键 | 在电脑短视频页点击内容区，适用于支持上下键切换的页面 |
+| VIDEO → Phone wheel | 滚轮向下 | 滚轮向上 | 手机 App 需接收蓝牙鼠标滚轮。iPhone 若未识别指针设备，可在「辅助功能 → 触控 → 辅助触控」中启用 |
 
-要换阅读器，在旧阅读器上忘记 **StickS3 Page**，然后在 StickS3 同时长按 A+B 约 5 秒。看到 `FORGET READER?` 后释放两键，再短按 A 确认，或按 B 取消。设备只清除蓝牙绑定，保留键位配置。配对使用加密的 BLE Just Works，请在你能确认目标阅读器的场合配对。
+手机滚轮是相对滚动输入。是否切到下一条取决于 App，有些 App 只处理触屏手势。普通视频播放器也可能把上下键用作音量。请在短视频流里测试。若分页漫画从右往左读，可通过 USB 串口设 `invert on`，再试两个方向。此设置会反转所有模式的 A/B 映射。
+
+首次安装和 v0.1 从未保存键位的设备默认进入 **PPT**。v0.1 已保存过的 Volume、Page、Arrow 键位分别延续为 BOOX、PPT、MANGA。日常短按在松手时发送一次，长按单键也只发一次。设备通过蓝牙发送按键，USB-C 用于供电和刷机。
+
+## 配对与换设备
+
+首次配对窗口为 90 秒，在目标设备的蓝牙设置选择 **StickS3 Page**。同一台主机切换模式时可以保持连接。更换主机时，同时按住 A+B 约 5 秒，看到 `FORGET DEVICE?`，松开两键，再短按 A 确认或 B 取消。设备目前保留一个绑定，换主机后在新设备上重新配对。确认清除绑定会保留模式设置。
+
+升级后如果 PHONE WHEEL 在支持滚轮的设备里没有反应，先在主机上忘记 **StickS3 Page**，再按上述步骤清除 StickS3 绑定并重新配对，让主机重新读取蓝牙输入描述。短暂断线时尝试重连 60 秒，超时后短按任意一键可重试，断线按键不会在重连后补发。
 
 ## USB 串口设置
 
-连接数据 USB-C，打开能发送行结束符的串口终端（115200），每行一条命令。
+用数据 USB-C 连接串口终端（115200），每行一条命令。可用 `help` 或 `status` 查看。
 
 | 命令 | 效果 |
 | --- | --- |
-| `status` | 查看当前键位、方向、绑定、连接和电量 |
-| `profile volume` | 使用音量减 / 音量加。默认 |
-| `profile page` | 使用 Page Down / Page Up |
-| `profile arrow` | 使用右 / 左方向键 |
-| `invert on` / `invert off` | 反转 / 恢复方向 |
+| `mode boox` / `mode ppt` | BOOX 或 PPT |
+| `mode manga` / `mode manga-scroll` | 漫画分页或整屏滚动 |
+| `mode video-pc` / `mode video-phone` | 短视频方向键或蓝牙滚轮 |
+| `invert on` / `invert off` | 反转或还原前后方向 |
 
-设置立即保存到设备。屏幕只在切换状态、设置和低电量提醒时短暂亮起，10 秒后关闭背光并让 LCD 休眠。第一版采用熄屏 BLE 常连，协商低功耗连接参数。空闲时仍可直接翻页，实际续航需测量。
+屏幕在状态变化或操作菜单时亮起，普通状态 10 秒后熄屏。BLE 在熄屏后可继续使用。
 
-## 构建与刷写
+## 构建、回滚与验收
 
-在此目录下使用 ESP-IDF **v5.5.2**。M5Unified 与 M5GFX 锁定在 **0.3.0**。
+使用 ESP-IDF **v5.5.2**，M5Unified 与 M5GFX 锁定为 **0.3.0**。
 
 ```sh
 idf.py build
-idf.py merge-bin -o sticks3-page-turner-0.1.0.bin
-```
-
-完整镜像烧写地址为 `0x0`。优先使用分区烧写 `idf.py -p COMx flash`，或者发行包中的三段镜像分别写入 `0x0`、`0x8000`、`0x10000`。确认串口和板型，烧写前备份旧固件和设备配置。完整镜像会覆盖分区间隙，其中包含 NVS。分区烧写保留 NVS 所在的地址范围。需要下载模式时，通过数据 USB-C 接入电脑，按住电源键，绿灯开始闪烁后松开。[M5Stack 官方下载模式说明](https://docs.m5stack.com/en/core/StickS3#download-mode)
-
-### 回滚
-
-如已做完整 Flash 备份，在同一台 K150 上用 esptool 将备份写回 `0x0`。备份可能含 Wi-Fi 凭据和蓝牙绑定信息，请保存在可信位置。也可以用 [Pocket Nexus 原网页刷机入口](https://ximinhu66.github.io/Pocket_Nexus/) 重新安装原固件，再按需恢复其配置。
-
-## 验收
-
-本机可运行按键和键值测试。
-
-```sh
+idf.py merge-bin -o sticks3-page-turner-0.2.0.bin
 cc -std=c11 -Wall -Wextra -Werror -I main main/controls.c tests/test_controls.c -o /tmp/sticks3-page-test
 /tmp/sticks3-page-test
 ```
 
-以下项目留待 StickS3 K150 和 BOOX Leaf 5C 实机验收。
+手动刷写优先用 `idf.py -p COMx flash`。单一合并镜像写入 `0x0` 会覆盖配置所在区间。完整 Flash 备份可能含 Wi-Fi 或蓝牙凭据，恢复时在同一台 K150 上写回 `0x0`。网页刷写默认使用分区镜像。
 
-| 项目 | 操作与通过标准 |
-| --- | --- |
-| 首次配对、重启和重连 | 首次配对后重启，能重新连接。对第二台主机保持单主机绑定。超时后通过实体键恢复 |
-| 阅读 App | 记录 BOOX 固件和 App 版本。NeoReader 和常用第三方 App 分别确认哪种键位可用、方向正确、系统音量无变化 |
-| 200 次翻页 | 下一页、上一页各 100 次。长按单键只翻一次，双键配对手势期间不翻页 |
-| 锁屏和断开 | 熄屏后真实翻页。关闭再开启 BOOX 蓝牙或锁屏再唤醒，检查恢复时间及断线期间的按键是否被丢弃 |
-| 配对更新 | 长按双键，分别验证取消和确认；确认后可换主机，三种键位和方向设置在重启后能保留 |
-| 离线和功耗 | 关闭 Wi-Fi。测配对广播、熄屏常连、每分钟翻两页、断线重连、广播停止后待机。低电提醒在电池约 15% 时检查 |
-
-参考 [ESP-IDF BLE HID Device 示例](https://github.com/espressif/esp-idf/tree/v5.5.2/examples/bluetooth/esp_hid_device)、[BOOX 按键映射说明](https://shop.boox.com/blogs/news/new-features-at-a-glance)。
+实机验收建议先在 Windows PowerPoint 放映中前后各翻一页，接着测试电脑漫画页面的分页和滚动、短视频的上一条和下一条。分别在 Leaf 5C、iPhone 配对后记录使用的 App 名称和输入类型。检查切换模式时不会误发按键、重启后保留模式，以及旧固件升级后能否直接使用新增鼠标报告。

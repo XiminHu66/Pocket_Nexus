@@ -72,10 +72,10 @@
   </section>
 
   <section id="page-turner" role="tabpanel" aria-labelledby="tab-page-turner" hidden>
-    <h2>BLE 翻页器 <span class="badge">v0.1.0</span></h2>
+    <h2>BLE 翻页器 <span class="badge">v0.2.0</span></h2>
     <p class="note">安装后设备启动为独立的 BLE 翻页器。回到 Pocket Nexus 标签可重新安装原固件。</p>
     <div class="install">
-      <esp-web-install-button manifest="manifest-page-turner.json">
+      <esp-web-install-button manifest="manifest-page-turner.json?v=0.2.0">
         <button slot="activate">连接并安装 BLE 翻页器</button>
         <span slot="unsupported">当前浏览器不支持 Web Serial。请使用桌面版 Chrome 或 Edge。</span>
         <span slot="not-allowed">浏览器阻止了串口访问，请通过 HTTPS 打开本页。</span>
@@ -83,8 +83,15 @@
     </div>
     <p class="note">在安装对话框中保持 <strong>Erase device</strong> 未勾选，以保留原设置和已绑定设备。</p>
     <div class="card">
-      <strong>安装后配对</strong>
-      <p class="note">在 BOOX 的蓝牙设置里连接 <strong>StickS3 Page</strong>。正面键下一页，侧面键上一页。阅读 App 提供「音量键翻页」时，先开启该设置。</p>
+      <strong>在设备上选择模式</strong>
+      <p class="note">同时按住正面 A 和侧面 B 约 1 秒后松开。菜单中 A 切换、B 确认。未设置过模式的设备默认使用 PPT。</p>
+      <ul class="note">
+        <li><strong>BOOX</strong> · 音量减 / 音量加。在阅读 App 内启用音量键翻页。</li>
+        <li><strong>PPT</strong> · Page Down / Page Up。先进入放映。</li>
+        <li><strong>MANGA</strong> · 分页用右 / 左方向键，长条漫画可选整屏滚动。</li>
+        <li><strong>VIDEO</strong> · 电脑版用下 / 上方向键，手机版可选蓝牙滚轮。手机 App 需支持滚轮输入。</li>
+      </ul>
+      <p class="note">蓝牙名称为 <strong>StickS3 Page</strong>。从旧版升级后，如果手机滚轮无反应，可忘记该设备后重新配对。</p>
       <a href="https://github.com/XiminHu66/Pocket_Nexus/blob/main/firmware/page-turner/README.md">配对、键位设置与实机验收</a>
     </div>
   </section>

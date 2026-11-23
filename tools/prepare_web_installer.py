@@ -16,6 +16,9 @@ def prepare(site, pio_build, boot_app0, pocket_merged, page_build):
     merged = pocket_merged.read_bytes()
     pio_boot_size = (pio_build / "bootloader.bin").stat().st_size
 
+    project = json.loads((page_build / "project_description.json").read_text(encoding="utf-8"))
+    page_version = project["project_version"]
+    page_path = f"page-turner/{page_version}"
     installers = {
         "manifest.json": [
             ("pocket-nexus/bootloader.bin", 0x0, merged[:pio_boot_size]),
@@ -24,10 +27,10 @@ def prepare(site, pio_build, boot_app0, pocket_merged, page_build):
             ("pocket-nexus/firmware.bin", 0x10000, (pio_build / "firmware.bin").read_bytes()),
         ],
         "manifest-page-turner.json": [
-            ("page-turner/bootloader.bin", 0x0, (page_build / "bootloader/bootloader.bin").read_bytes()),
-            ("page-turner/partition-table.bin", 0x8000,
+            (f"{page_path}/bootloader.bin", 0x0, (page_build / "bootloader/bootloader.bin").read_bytes()),
+            (f"{page_path}/partition-table.bin", 0x8000,
              (page_build / "partition_table/partition-table.bin").read_bytes()),
-            ("page-turner/sticks3-page-turner.bin", 0x10000, (page_build / "sticks3-page-turner.bin").read_bytes()),
+            (f"{page_path}/sticks3-page-turner.bin", 0x10000, (page_build / "sticks3-page-turner.bin").read_bytes()),
         ],
     }
 
@@ -38,10 +41,8 @@ def prepare(site, pio_build, boot_app0, pocket_merged, page_build):
         ]}]
         if manifest["builds"] != expected or manifest.get("new_install_prompt_erase") is not True:
             raise ValueError(f"{manifest_name} must use the expected parts and prompt before erasing")
-        if manifest_name == "manifest-page-turner.json":
-            project = json.loads((page_build / "project_description.json").read_text(encoding="utf-8"))
-            if project["project_version"] != manifest["version"]:
-                raise ValueError("Page turner version differs between firmware and manifest")
+        if manifest_name == "manifest-page-turner.json" and manifest["version"] != page_version:
+            raise ValueError("Page turner version differs between firmware and manifest")
 
         previous_end = 0
         for name, offset, data in parts:
