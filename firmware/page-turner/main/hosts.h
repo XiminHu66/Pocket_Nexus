@@ -23,7 +23,7 @@ typedef struct {
     uint8_t settings;
 } page_host_t;
 
-// Stored as bytes under hosts_v1. Keep slot indices stable when a host is removed.
+// Stored as bytes in NVS. Keep slot indices stable when a host is removed.
 typedef struct {
     page_host_t hosts[PAGE_HOST_COUNT];
     uint8_t current;
@@ -44,6 +44,7 @@ void page_host_remove(page_host_book_t *book, uint8_t slot);
 void page_host_connected(page_host_book_t *book, uint8_t slot);
 bool page_host_can_send(const page_host_book_t *book, uint8_t target,
                         const page_host_address_t *address, bool encrypted, bool bonded);
+bool page_hosts_migrate_iphone(page_host_book_t *book);
 uint8_t page_host_label_settings(page_host_label_t label, uint8_t fallback);
 const char *page_host_label_name(page_host_label_t label);
 

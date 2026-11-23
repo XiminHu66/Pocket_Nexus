@@ -109,6 +109,64 @@ static void test_reports(void)
     assert(page_report_for(PROFILE_COUNT, false, PAGE_NEXT).id == 0);
 }
 
+static void test_iphone_swipe_frames(void)
+{
+    assert(page_swipe_for(PROFILE_IPHONE_VERTICAL, false, PAGE_NEXT) == SWIPE_UP);
+    assert(page_swipe_for(PROFILE_IPHONE_VERTICAL, false, PAGE_PREV) == SWIPE_DOWN);
+    assert(page_swipe_for(PROFILE_IPHONE_HORIZONTAL, false, PAGE_NEXT) == SWIPE_LEFT);
+    assert(page_swipe_for(PROFILE_IPHONE_HORIZONTAL, false, PAGE_PREV) == SWIPE_RIGHT);
+    assert(page_swipe_for(PROFILE_IPHONE_VERTICAL, true, PAGE_NEXT) == SWIPE_DOWN);
+    assert(page_swipe_for(PROFILE_IPHONE_HORIZONTAL, true, PAGE_PREV) == SWIPE_LEFT);
+    assert(page_swipe_for(PROFILE_PPT, false, PAGE_NEXT) == SWIPE_NONE);
+    assert(page_swipe_for(PROFILE_IPHONE_VERTICAL, false, PAGE_DEVICE_GESTURE) == SWIPE_NONE);
+
+    for (page_swipe_direction_t dir = SWIPE_UP; dir <= SWIPE_RIGHT; ++dir) {
+        uint8_t frame[REPORT_MOUSE_SIZE];
+        uint8_t delay;
+        unsigned step = 0, elapsed = 0, pressed = 0;
+        int x = 0, y = 0, x_at_down = 0, y_at_down = 0;
+        int drag_x = 0, drag_y = 0;
+        // Model a small iPhone screen and start the pointer away from the chosen corner.
+        int cursor_x = 250, cursor_y = 420;
+        while (page_swipe_frame(dir, step, frame, &delay)) {
+            assert(++step < 50);
+            assert(frame[0] <= 1 && frame[3] == 0);
+            assert(delay >= 10 && delay <= 40);
+            int dx = (int8_t)frame[1];
+            int dy = (int8_t)frame[2];
+            cursor_x += dx;
+            cursor_y += dy;
+            if (cursor_x < 0) cursor_x = 0;
+            if (cursor_y < 0) cursor_y = 0;
+            if (cursor_x > 375) cursor_x = 375;
+            if (cursor_y > 667) cursor_y = 667;
+            elapsed += delay;
+            if (frame[0]) {
+                if (pressed++ == 0) {
+                    assert(dx == 0 && dy == 0 && delay >= 25);
+                    x_at_down = cursor_x;
+                    y_at_down = cursor_y;
+                }
+                drag_x += dx;
+                drag_y += dy;
+                x = cursor_x;
+                y = cursor_y;
+            } else {
+                assert(pressed == 0);
+            }
+        }
+        assert(step == 36 && pressed == 11 && elapsed < 550);
+        assert(x_at_down > 70 && x_at_down < 305 && y_at_down > 150 && y_at_down < 520);
+        switch (dir) {
+        case SWIPE_UP: assert(drag_x == 0 && drag_y < -300 && y < y_at_down); break;
+        case SWIPE_DOWN: assert(drag_x == 0 && drag_y > 300 && y > y_at_down); break;
+        case SWIPE_LEFT: assert(drag_y == 0 && drag_x < -150 && x < x_at_down); break;
+        case SWIPE_RIGHT: assert(drag_y == 0 && drag_x > 150 && x > x_at_down); break;
+        default: assert(false);
+        }
+    }
+}
+
 int main(void)
 {
     test_button_taps();
@@ -116,6 +174,7 @@ int main(void)
     test_device_chord();
     test_mode_chord();
     test_reports();
-    puts("PASS: 200 simulated taps, debounce, hold, mode / device chords, timer wrap, and all HID mappings");
+    test_iphone_swipe_frames();
+    puts("PASS: 200 simulated taps, debounce, hold, mode / device chords, timer wrap, HID mappings and iPhone swipe frames");
     return 0;
 }

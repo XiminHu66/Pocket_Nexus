@@ -60,7 +60,7 @@ static void test_switch_sequence(void)
 
     assert(book.hosts[0].settings == PROFILE_PPT);
     assert(book.hosts[1].settings == PROFILE_BOOX);
-    assert(book.hosts[2].settings == PROFILE_VIDEO_WHEEL);
+    assert(book.hosts[2].settings == PROFILE_IPHONE_VERTICAL);
     assert(book.hosts[3].settings == (PROFILE_MANGA_SCROLL | PAGE_SETTINGS_INVERT));
 
     page_host_remove(&book, 1);
@@ -76,10 +76,31 @@ static void test_switch_sequence(void)
     assert(!page_hosts_valid(&book));
 }
 
+static void test_iphone_profile_upgrade(void)
+{
+    page_host_book_t book;
+    page_hosts_init(&book, PROFILE_PPT);
+    assert(page_host_add(&book, 0, &pc, HOST_PC, PROFILE_MANGA));
+    assert(page_host_add(&book, 1, &boox, HOST_BOOX, PROFILE_BOOX));
+    assert(page_host_add(&book, 2, &phone, HOST_IPHONE, PROFILE_VIDEO_WHEEL));
+    assert(page_host_add(&book, 3, &spare, HOST_IPHONE, PROFILE_MANGA | PAGE_SETTINGS_INVERT));
+    page_host_connected(&book, 2);
+    page_host_connected(&book, 0);
+    assert(page_hosts_migrate_iphone(&book));
+    assert(book.hosts[0].settings == PROFILE_MANGA && book.hosts[1].settings == PROFILE_BOOX);
+    assert(book.hosts[2].settings == PROFILE_IPHONE_VERTICAL);
+    assert(book.hosts[3].settings == (PROFILE_IPHONE_HORIZONTAL | PAGE_SETTINGS_INVERT));
+    assert(book.current == 0 && book.previous == 2);
+    assert(page_host_can_send(&book, 2, &phone, true, true));
+    assert(!page_hosts_migrate_iphone(&book));
+    assert(page_hosts_valid(&book));
+}
+
 int main(void)
 {
     test_migration();
     test_switch_sequence();
-    puts("PASS: legacy settings, four hosts, per-host modes, recent switch, fail-back, identity routing and removal");
+    test_iphone_profile_upgrade();
+    puts("PASS: legacy settings, iPhone profile upgrade, four hosts, per-host modes, recent switch, fail-back, identity routing and removal");
     return 0;
 }

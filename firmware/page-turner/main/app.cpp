@@ -35,7 +35,8 @@ constexpr Mode modes[] = {
     {"BOOX", PROFILE_BOOX, PROFILE_COUNT, "", ""},
     {"PPT", PROFILE_PPT, PROFILE_COUNT, "", ""},
     {"MANGA", PROFILE_MANGA, PROFILE_MANGA_SCROLL, "Page arrows", "Page Up / Down"},
-    {"VIDEO", PROFILE_VIDEO_KEYS, PROFILE_VIDEO_WHEEL, "PC arrow keys", "Phone wheel"},
+    {"VIDEO", PROFILE_VIDEO_KEYS, PROFILE_VIDEO_WHEEL, "PC arrow keys", "Mouse wheel"},
+    {"IPHONE", PROFILE_IPHONE_VERTICAL, PROFILE_IPHONE_HORIZONTAL, "Vertical swipe", "Horizontal swipe"},
 };
 constexpr unsigned mode_count = sizeof(modes) / sizeof(modes[0]);
 
@@ -129,6 +130,13 @@ void render_choice(unsigned row, bool selected, const char *text)
     display.drawString(text, 20, 108 + row * 13);
 }
 
+bool needs_phone_pointer(const page_ble_status_t &status)
+{
+    auto mode = static_cast<page_profile_t>(status.settings & ~PAGE_SETTINGS_INVERT);
+    return page_swipe_for(mode, false, PAGE_NEXT) != SWIPE_NONE &&
+           !(status.reports & (1U << REPORT_MOUSE));
+}
+
 void show(page_ble_status_t status, uint32_t now)
 {
     if (!display_ready) {
@@ -164,8 +172,10 @@ void show(page_ble_status_t status, uint32_t now)
         case BLE_PAIRING: title = "PAIRING"; line = PAGE_BLE_NAME; break;
         case BLE_RECONNECTING: title = "RECONNECTING"; line = "Open host Bluetooth"; break;
         case BLE_SECURING: title = "CONNECTING"; line = "Securing Bluetooth"; break;
-        case BLE_CONNECTED: title = low_battery ? "LOW BATTERY" : "CONNECTED";
-            line = "A: Next   B: Back"; break;
+        case BLE_CONNECTED:
+            title = needs_phone_pointer(status) ? "NO POINTER" : (low_battery ? "LOW BATTERY" : "CONNECTED");
+            line = needs_phone_pointer(status) ? "Enable AssistiveTouch" : "A: Next   B: Back";
+            break;
         case BLE_IDLE: title = "DISCONNECTED";
             line = status.selected < PAGE_HOST_COUNT ? "Tap A or B to retry" : "Add via device menu"; break;
         case BLE_SWITCHING: title = "SWITCHING"; break;
@@ -229,6 +239,8 @@ void show(page_ble_status_t status, uint32_t now)
     } else if (menu == Menu::None) {
         if (status.state == BLE_PAIRING) {
             display.drawString("Open host Bluetooth", 8, 104);
+        } else if (status.state == BLE_CONNECTED && needs_phone_pointer(status)) {
+            display.drawString("Check iPhone Devices", 8, 104);
         } else if (status.state == BLE_RETRY_OR_BACK && status.previous < PAGE_HOST_COUNT) {
             char name[20];
             host_name(name, sizeof(name), status.previous, status.labels[status.previous]);
@@ -387,16 +399,17 @@ void handle_menu_button(page_action_t action, const page_ble_status_t &status, u
 bool handle_command(const char *line)
 {
     if (std::strcmp(line, "help") == 0) {
-        std::puts("status | mode boox/ppt/manga/manga-scroll/video-pc/video-phone | invert on/off");
+        std::puts("status | mode boox/ppt/manga/manga-scroll/video-pc/video-phone/iphone-vertical/iphone-horizontal | invert on/off");
         return false;
     }
     if (std::strcmp(line, "status") == 0) {
         auto status = page_ble_status();
         char device[20];
         host_name(device, sizeof(device), status.selected, status.target_label);
-        std::printf("%s, mode %s, inverted %s, connected %s, battery %d%%\n", device,
+        std::printf("%s, mode %s, inverted %s, connected %s, mouse report %s, battery %d%%\n", device,
                     page_profile_name(profile), inverted ? "yes" : "no",
-                    status.state == BLE_CONNECTED ? "yes" : "no", battery_level);
+                    status.state == BLE_CONNECTED ? "yes" : "no",
+                    status.reports & (1U << REPORT_MOUSE) ? "ready" : "unavailable", battery_level);
         return false;
     }
 
@@ -404,6 +417,7 @@ bool handle_command(const char *line)
         {"mode boox", PROFILE_BOOX}, {"mode ppt", PROFILE_PPT},
         {"mode manga", PROFILE_MANGA}, {"mode manga-scroll", PROFILE_MANGA_SCROLL},
         {"mode video-pc", PROFILE_VIDEO_KEYS}, {"mode video-phone", PROFILE_VIDEO_WHEEL},
+        {"mode iphone-vertical", PROFILE_IPHONE_VERTICAL}, {"mode iphone-horizontal", PROFILE_IPHONE_HORIZONTAL},
         {"profile volume", PROFILE_BOOX}, {"profile page", PROFILE_PPT}, {"profile arrow", PROFILE_MANGA},
     };
     for (const auto &shortcut : shortcuts) {
@@ -521,6 +535,7 @@ extern "C" void app_main()
         bool redraw = status.state != previous.state || status.selected != previous.selected ||
                       status.target_label != previous.target_label || status.settings != previous.settings ||
                       status.storage_failed != previous.storage_failed ||
+                      needs_phone_pointer(status) != needs_phone_pointer(previous) ||
                       std::memcmp(status.labels, previous.labels, sizeof(status.labels)) != 0;
         previous = status;
         profile = static_cast<page_profile_t>(status.settings & ~PAGE_SETTINGS_INVERT);
@@ -564,7 +579,10 @@ extern "C" void app_main()
                 redraw = true;
             } else if (press_profile == profile && press_inverted == inverted) {
                 if (press_status.state == BLE_CONNECTED && status.state == BLE_CONNECTED) {
-                    page_ble_send(press_status.session, profile, inverted, action);
+                    if (!page_ble_send(press_status.session, profile, inverted, action) &&
+                        needs_phone_pointer(status)) {
+                        redraw = true;
+                    }
                 } else if (press_status.state == BLE_RETRY_OR_BACK && status.state == BLE_RETRY_OR_BACK) {
                     if (action == PAGE_PREV) {
                         page_ble_select(status.previous);
