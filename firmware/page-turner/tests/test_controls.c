@@ -36,15 +36,15 @@ static void test_hold_and_clock_wrap(void)
     assert(page_buttons_poll(&buttons, 0, start + 11050) == PAGE_NONE);
 }
 
-static void test_pairing_chord(void)
+static void test_device_chord(void)
 {
     page_buttons_t buttons = {0};
     assert(page_buttons_poll(&buttons, KEY_FRONT, 100) == PAGE_NONE);
     assert(page_buttons_poll(&buttons, KEY_FRONT, 125) == PAGE_NONE);
     assert(page_buttons_poll(&buttons, KEYS_BOTH, 200) == PAGE_NONE);
     assert(page_buttons_poll(&buttons, KEYS_BOTH, 225) == PAGE_NONE);
-    assert(page_buttons_poll(&buttons, KEYS_BOTH, 5224) == PAGE_NONE);
-    assert(page_buttons_poll(&buttons, KEYS_BOTH, 5225) == PAGE_PAIR_GESTURE);
+    assert(page_buttons_poll(&buttons, KEYS_BOTH, 3224) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEYS_BOTH, 3225) == PAGE_DEVICE_GESTURE);
     assert(page_buttons_poll(&buttons, KEYS_BOTH, 7000) == PAGE_NONE);
     assert(page_buttons_poll(&buttons, KEY_SIDE, 7100) == PAGE_NONE);
     assert(page_buttons_poll(&buttons, KEY_SIDE, 7125) == PAGE_NONE);
@@ -105,7 +105,7 @@ static void test_reports(void)
     assert(PROFILE_BOOX == 0 && PROFILE_PPT == 1 && PROFILE_MANGA == 2);
     assert(page_report_for(PROFILE_BOOX, false, PAGE_NONE).id == 0);
     assert(page_report_for(PROFILE_PPT, false, PAGE_MODE_GESTURE).id == 0);
-    assert(page_report_for(PROFILE_BOOX, false, PAGE_PAIR_GESTURE).id == 0);
+    assert(page_report_for(PROFILE_BOOX, false, PAGE_DEVICE_GESTURE).id == 0);
     assert(page_report_for(PROFILE_COUNT, false, PAGE_NEXT).id == 0);
 }
 
@@ -113,9 +113,9 @@ int main(void)
 {
     test_button_taps();
     test_hold_and_clock_wrap();
-    test_pairing_chord();
+    test_device_chord();
     test_mode_chord();
     test_reports();
-    puts("PASS: 200 simulated taps, debounce, hold, mode / pairing chords, timer wrap, and all HID mappings");
+    puts("PASS: 200 simulated taps, debounce, hold, mode / device chords, timer wrap, and all HID mappings");
     return 0;
 }

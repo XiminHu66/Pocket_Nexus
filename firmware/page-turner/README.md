@@ -23,11 +23,15 @@
 
 首次安装和 v0.1 从未保存键位的设备默认进入 **PPT**。v0.1 已保存过的 Volume、Page、Arrow 键位分别延续为 BOOX、PPT、MANGA。日常短按在松手时发送一次，长按单键也只发一次。设备通过蓝牙发送按键，USB-C 用于供电和刷机。
 
-## 配对与换设备
+## 配对和多设备切换
 
-首次配对窗口为 90 秒，在目标设备的蓝牙设置选择 **StickS3 Page**。同一台主机切换模式时可以保持连接。更换主机时，同时按住 A+B 约 5 秒，看到 `FORGET DEVICE?`，松开两键，再短按 A 确认或 B 取消。设备目前保留一个绑定，换主机后在新设备上重新配对。确认清除绑定会保留模式设置。
+- **已有配对**从 v0.2 升级时不勾选 `Erase device`。现有设备会迁入第一个位置，保留模式和方向。可在 `Manage devices → 选择设备 → Name` 给它加上标签。
+- **切换设备**同时按住 A+B 约 3 秒，看到 `DEVICES` 后松开。A 浏览，B 连接。菜单优先高亮上一次使用的另一台设备，适合两台设备来回切换。当前连接在列表中有星号。
+- **首次配对**在目标设备的蓝牙设置选择 **StickS3 Page**。首个配对后进入 `DEVICES → Add device` 添加其他设备，选择 PC、BOOX、IPHONE 或 DEVICE 标签。配对窗口为 90 秒，最多保存 4 台。PC 初始用 PPT，BOOX 初始用音量键，IPHONE 初始用手机滚轮。首次自动配对使用通用标签和默认键位。
+- **等待超时**显式切换等待约 12 秒，已开始的蓝牙配对握手另有超时。目标不可用时，A 重试，B 返回上一台设备。重启会尝试连接上次成功连接的设备。选定设备、加密连接和输入通道都就绪后才发送按键，切换过程的按键不会补发。
+- **移除设备**进入 `DEVICES → Manage devices → 选择设备 → Forget`，再按 A 确认或 B 取消。如果设备已经清除了 StickS3 的配对，应在 StickS3 也清除对应的一项后重新添加。列表满时可以先移除一个旧绑定。
 
-升级后如果 PHONE WHEEL 在支持滚轮的设备里没有反应，先在主机上忘记 **StickS3 Page**，再按上述步骤清除 StickS3 绑定并重新配对，让主机重新读取蓝牙输入描述。短暂断线时尝试重连 60 秒，超时后短按任意一键可重试，断线按键不会在重连后补发。
+同一台设备通过 A+B 约 1 秒继续打开模式菜单。每台设备分别记住键位和方向。升级后如果手机滚轮在支持滚轮的 App 里无反应，可以两端忘记对应的配对并重新配对，让主机读取完整输入描述。
 
 ## USB 串口设置
 
@@ -48,11 +52,13 @@
 
 ```sh
 idf.py build
-idf.py merge-bin -o sticks3-page-turner-0.2.0.bin
+idf.py merge-bin -o sticks3-page-turner-0.3.0.bin
 cc -std=c11 -Wall -Wextra -Werror -I main main/controls.c tests/test_controls.c -o /tmp/sticks3-page-test
 /tmp/sticks3-page-test
+cc -std=c11 -Wall -Wextra -Werror -I main main/hosts.c tests/test_hosts.c -o /tmp/sticks3-hosts-test
+/tmp/sticks3-hosts-test
 ```
 
 手动刷写优先用 `idf.py -p COMx flash`。单一合并镜像写入 `0x0` 会覆盖配置所在区间。完整 Flash 备份可能含 Wi-Fi 或蓝牙凭据，恢复时在同一台 K150 上写回 `0x0`。网页刷写默认使用分区镜像。
 
-实机验收建议先在 Windows PowerPoint 放映中前后各翻一页，接着测试电脑漫画页面的分页和滚动、短视频的上一条和下一条。分别在 Leaf 5C、iPhone 配对后记录使用的 App 名称和输入类型。检查切换模式时不会误发按键、重启后保留模式，以及旧固件升级后能否直接使用新增鼠标报告。
+实机验收建议先在 Windows PowerPoint 放映中前后各翻一页，接着测试电脑漫画页面的分页和滚动、短视频的上一条和下一条。分别在 Leaf 5C、iPhone 配对后记录使用的 App 名称和输入类型。检查升级保留旧配对、三台设备同时开蓝牙时只向选中的设备发按键、超时后退回原设备、恢复上次设备及其键位，以及移除一个设备后其他绑定仍能重连。

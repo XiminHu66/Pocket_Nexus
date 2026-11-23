@@ -14,7 +14,7 @@ typedef enum {
     PROFILE_COUNT
 } page_profile_t;
 
-typedef enum { PAGE_NONE, PAGE_NEXT, PAGE_PREV, PAGE_MODE_GESTURE, PAGE_PAIR_GESTURE } page_action_t;
+typedef enum { PAGE_NONE, PAGE_NEXT, PAGE_PREV, PAGE_MODE_GESTURE, PAGE_DEVICE_GESTURE } page_action_t;
 typedef enum { KEY_FRONT = 1, KEY_SIDE = 2, KEYS_BOTH = 3 } page_keys_t;
 
 enum { REPORT_KEYBOARD = 1, REPORT_CONSUMER = 2, REPORT_MOUSE = 3 };
@@ -27,7 +27,7 @@ typedef struct {
     uint32_t changed_at;
     uint32_t chord_at;
     bool mode_pending;
-    bool pair_fired;
+    bool devices_fired;
 } page_buttons_t;
 
 typedef struct {

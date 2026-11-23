@@ -72,10 +72,10 @@
   </section>
 
   <section id="page-turner" role="tabpanel" aria-labelledby="tab-page-turner" hidden>
-    <h2>BLE 翻页器 <span class="badge">v0.2.0</span></h2>
+    <h2>BLE 翻页器 <span class="badge">v0.3.0</span></h2>
     <p class="note">安装后设备启动为独立的 BLE 翻页器。回到 Pocket Nexus 标签可重新安装原固件。</p>
     <div class="install">
-      <esp-web-install-button manifest="manifest-page-turner.json?v=0.2.0">
+      <esp-web-install-button manifest="manifest-page-turner.json?v=0.3.0">
         <button slot="activate">连接并安装 BLE 翻页器</button>
         <span slot="unsupported">当前浏览器不支持 Web Serial。请使用桌面版 Chrome 或 Edge。</span>
         <span slot="not-allowed">浏览器阻止了串口访问，请通过 HTTPS 打开本页。</span>
@@ -91,7 +91,8 @@
         <li><strong>MANGA</strong> · 分页用右 / 左方向键，长条漫画可选整屏滚动。</li>
         <li><strong>VIDEO</strong> · 电脑版用下 / 上方向键，手机版可选蓝牙滚轮。手机 App 需支持滚轮输入。</li>
       </ul>
-      <p class="note">蓝牙名称为 <strong>StickS3 Page</strong>。从旧版升级后，如果手机滚轮无反应，可忘记该设备后重新配对。</p>
+      <p class="note"><strong>多设备切换</strong> · A+B 按住约 3 秒打开 DEVICES，A 浏览、B 连接。最多记住 4 台，每台保留自己的模式和方向。添加设备时在主机蓝牙列表选择 <strong>StickS3 Page</strong>。</p>
+      <p class="note">从旧版刷入时保留设备设置，已配对的设备会出现在第一个位置，可在 Manage devices 中给它加上标签。</p>
       <a href="https://github.com/XiminHu66/Pocket_Nexus/blob/main/firmware/page-turner/README.md">配对、键位设置与实机验收</a>
     </div>
   </section>
