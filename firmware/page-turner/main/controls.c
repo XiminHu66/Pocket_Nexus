@@ -1,6 +1,6 @@
 #include "controls.h"
 
-enum { DEBOUNCE_MS = 25, MODE_HOLD_MS = 600, PAIR_HOLD_MS = 5000, VIDEO_WHEEL_STEPS = 3 };
+enum { DEBOUNCE_MS = 25, MODE_HOLD_MS = 600, DEVICE_HOLD_MS = 3000, VIDEO_WHEEL_STEPS = 3 };
 
 page_action_t page_buttons_poll(page_buttons_t *buttons, uint8_t raw, uint32_t now)
 {
@@ -18,10 +18,10 @@ page_action_t page_buttons_poll(page_buttons_t *buttons, uint8_t raw, uint32_t n
             buttons->gesture |= raw;
         } else {
             uint8_t gesture = buttons->gesture;
-            bool open_modes = buttons->mode_pending && !buttons->pair_fired;
+            bool open_modes = buttons->mode_pending && !buttons->devices_fired;
             buttons->gesture = 0;
             buttons->mode_pending = false;
-            buttons->pair_fired = false;
+            buttons->devices_fired = false;
             if (gesture == KEY_FRONT) {
                 return PAGE_NEXT;
             }
@@ -33,11 +33,11 @@ page_action_t page_buttons_poll(page_buttons_t *buttons, uint8_t raw, uint32_t n
             }
         }
     }
-    if (buttons->stable == KEYS_BOTH && raw == KEYS_BOTH && !buttons->pair_fired) {
+    if (buttons->stable == KEYS_BOTH && raw == KEYS_BOTH && !buttons->devices_fired) {
         uint32_t held = now - buttons->chord_at;
-        if (held >= PAIR_HOLD_MS) {
-            buttons->pair_fired = true;
-            return PAGE_PAIR_GESTURE;
+        if (held >= DEVICE_HOLD_MS) {
+            buttons->devices_fired = true;
+            return PAGE_DEVICE_GESTURE;
         }
         if (held >= MODE_HOLD_MS) {
             buttons->mode_pending = true;

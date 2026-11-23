@@ -5,6 +5,8 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "nvs.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
 #include "nimble/nimble_port.h"
@@ -16,11 +18,10 @@
 void ble_store_config_init(void);
 
 enum {
-    PAIR_MS = 90000, RECONNECT_MS = 60000, SECURITY_MS = 12000,
+    PAIR_MS = 90000, RECONNECT_MS = 60000, SWITCH_MS = 12000, SECURITY_MS = 12000,
     RELEASE_MS = 30, RELEASE_RETRY_MS = 15, MAX_RELEASE_TRIES = 4,
-    SNAP_STATE = 0x07, SNAP_BONDED = 0x08, REPORT_FLAG_SHIFT = 3,
     REQUEST_PROFILE = 0x07, REQUEST_INVERT = 0x08, REQUEST_PREVIOUS = 0x10, REQUEST_VALID = 0x20,
-    SESSION_SHIFT = 8, CMD_RETRY = 1, CMD_CLEAR = 2, CMD_BATTERY = 4,
+    SESSION_SHIFT = 8, CMD_RETRY = 1, CMD_BATTERY = 2,
 };
 
 _Static_assert(PROFILE_COUNT <= REQUEST_PROFILE + 1, "HID request profile must fit");
@@ -60,41 +61,68 @@ static const uint8_t report_map[] = {
     0x25, 0x7f, 0x75, 0x08, 0x95, 0x03, 0x81, 0x06, 0xc0, 0xc0,
 };
 
-// The BLE host task owns the link and timers. The application sees an atomic
-// snapshot and submits at most one report for that exact connection session.
-static _Atomic uint32_t snapshot;
+typedef enum { HOST_CMD_NONE, HOST_CMD_SELECT, HOST_CMD_ADD, HOST_CMD_FORGET,
+               HOST_CMD_RENAME, HOST_CMD_CONFIG } host_operation_t;
+
+// The host task owns the directory, live connection and timers. Only copies of
+// status and small commands cross from the controls task into NimBLE.
+static portMUX_TYPE status_lock = portMUX_INITIALIZER_UNLOCKED;
+static page_ble_status_t snapshot = {
+    .state = BLE_STARTING, .selected = PAGE_HOST_NONE, .previous = PAGE_HOST_NONE,
+    .settings = PROFILE_PPT,
+};
 static _Atomic uint32_t pending_page;
+static _Atomic unsigned pending_host;
 static _Atomic unsigned commands;
 static _Atomic unsigned battery_percent = 100;
 static _Atomic bool started;
-static struct ble_npl_event command_event;
+static struct ble_npl_event command_event, advertising_event;
 static struct ble_npl_callout release_timer, security_timer;
+static page_host_book_t book;
+static nvs_handle_t host_store;
+static uint8_t legacy_settings = PROFILE_PPT;
+static unsigned transition;
 static uint16_t conn = BLE_HS_CONN_HANDLE_NONE;
 static uint16_t input_handles[REPORT_MOUSE + 1];
 static uint32_t session;
 static int64_t adv_until, security_until, release_at;
 static uint8_t own_addr_type;
-static unsigned subscriptions;
-static unsigned release_tries;
+static uint8_t target = PAGE_HOST_NONE;
+static uint8_t pair_slot = PAGE_HOST_NONE;
+static page_host_label_t pair_label;
+static unsigned subscriptions, release_tries;
 static page_report_t active_report;
-static ble_addr_t peer;
-static bool bonded, encrypted, suspended, synced, clearing, boot_window_opened;
+static bool encrypted, suspended, synced, initialized, manual_window, storage_failed;
 
 static int on_gap(struct ble_gap_event *event, void *arg);
-static void advertise(void);
 
 static unsigned report_flag(uint8_t id)
 {
-    return 1U << (id + REPORT_FLAG_SHIFT);
+    return 1U << id;
+}
+
+static uint8_t current_settings(void)
+{
+    return page_host_exists(&book, target) ? book.hosts[target].settings : book.fallback;
 }
 
 static void publish(page_ble_state_t state)
 {
-    unsigned flags = bonded ? SNAP_BONDED : 0;
-    if (state == BLE_CONNECTED && !suspended) {
-        flags |= subscriptions;
+    page_ble_status_t status = {
+        .state = state, .session = session,
+        .selected = pair_slot != PAGE_HOST_NONE ? pair_slot : target,
+        .previous = page_host_return(&book, pair_slot != PAGE_HOST_NONE ? PAGE_HOST_NONE : target),
+        .settings = current_settings(), .target_label = pair_slot != PAGE_HOST_NONE ? pair_label :
+            (page_host_exists(&book, target) ? book.hosts[target].label : HOST_EMPTY),
+        .reports = state == BLE_CONNECTED && !suspended && !transition ? subscriptions : 0,
+        .storage_failed = storage_failed,
+    };
+    for (uint8_t slot = 0; slot < PAGE_HOST_COUNT; ++slot) {
+        status.labels[slot] = book.hosts[slot].label;
     }
-    atomic_store(&snapshot, (session << SESSION_SHIFT) | flags | state);
+    portENTER_CRITICAL(&status_lock);
+    snapshot = status;
+    portEXIT_CRITICAL(&status_lock);
 }
 
 static int append_value(struct os_mbuf *om, const void *bytes, uint16_t size)
@@ -121,7 +149,7 @@ static int hid_access(uint16_t handle, uint16_t attribute, struct ble_gatt_acces
             return BLE_ATT_ERR_UNLIKELY;
         }
         suspended = value == 0;
-        if (encrypted) {
+        if (encrypted && !transition) {
             publish(BLE_CONNECTED);
         }
         return 0;
@@ -215,41 +243,124 @@ static int64_t now_ms(void)
     return esp_timer_get_time() / 1000;
 }
 
-static bool same_peer(const ble_addr_t *addr)
+static page_host_address_t host_address(const ble_addr_t *addr)
 {
-    // NimBLE returns identity types with the identity bit set for resolved RPAs.
-    return ((addr->type ^ peer.type) & 1) == 0 && memcmp(addr->val, peer.val, 6) == 0;
+    page_host_address_t address = { .type = addr->type & 1 };
+    memcpy(address.bytes, addr->val, sizeof(address.bytes));
+    return address;
 }
 
-static bool read_bond(void)
+static ble_addr_t ble_address(uint8_t slot)
 {
-    int count = 0;
-    int rc = ble_store_util_bonded_peers(&peer, &count, 1);
+    const page_host_address_t *address = &book.hosts[slot].address;
+    ble_addr_t peer = { .type = address->type };
+    memcpy(peer.val, address->bytes, sizeof(peer.val));
+    return peer;
+}
+
+static void save_host_book(void)
+{
+    esp_err_t err = nvs_set_blob(host_store, "hosts_v1", &book, sizeof(book));
+    if (err == ESP_OK) {
+        err = nvs_commit(host_store);
+    }
+    storage_failed = err != ESP_OK;
+    if (storage_failed) {
+        ESP_LOGE(TAG, "Save hosts: %s", esp_err_to_name(err));
+    }
+}
+
+static bool read_bonds(ble_addr_t *peers, int *count)
+{
+    *count = 0;
+    int rc = ble_store_util_bonded_peers(peers, count, PAGE_HOST_COUNT);
     if (rc != 0) {
         ESP_LOGE(TAG, "Read bonds: %d", rc);
         return false;
     }
-    bonded = count == 1;
-    peer.type &= 1;
     return true;
 }
 
-static void advertise(void)
+static bool load_hosts(void)
 {
+    ble_addr_t peers[PAGE_HOST_COUNT];
+    int count;
+    if (!read_bonds(peers, &count)) {
+        return false;
+    }
+    page_hosts_init(&book, legacy_settings);
+    size_t size = sizeof(book);
+    page_host_book_t saved;
+    esp_err_t err = nvs_get_blob(host_store, "hosts_v1", &saved, &size);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND && err != ESP_ERR_NVS_INVALID_LENGTH) {
+        ESP_LOGE(TAG, "Load hosts: %s", esp_err_to_name(err));
+        return false;
+    }
+    bool valid = err == ESP_OK && size == sizeof(saved) && page_hosts_valid(&saved);
+    if (valid) {
+        book = saved;
+    }
+    // Reconcile after power loss between persisting a bond and saving its slot.
+    uint8_t present = 0;
+    for (int i = 0; i < count; ++i) {
+        page_host_address_t address = host_address(&peers[i]);
+        uint8_t slot = page_host_find(&book, &address);
+        if (slot != PAGE_HOST_NONE) {
+            present |= 1U << slot;
+        }
+    }
+    for (uint8_t slot = 0; slot < PAGE_HOST_COUNT; ++slot) {
+        if (!(present & (1U << slot))) {
+            page_host_remove(&book, slot);
+        }
+    }
+    for (int i = 0; i < count; ++i) {
+        page_host_address_t address = host_address(&peers[i]);
+        if (page_host_find(&book, &address) == PAGE_HOST_NONE) {
+            page_host_add(&book, page_host_first_free(&book), &address, HOST_OTHER, book.fallback);
+        }
+    }
+    if (!valid || memcmp(&saved, &book, sizeof(book)) != 0) {
+        save_host_book();
+    }
+    return true;
+}
+
+static bool pairing(void)
+{
+    return pair_slot < PAGE_HOST_COUNT;
+}
+
+static void advertising_finished(void)
+{
+    bool return_available = page_host_exists(&book, book.current) &&
+                            (pairing() || target != book.current);
+    publish(manual_window && return_available ? BLE_RETRY_OR_BACK : BLE_IDLE);
+}
+
+static void advertise(struct ble_npl_event *event)
+{
+    (void)event;
+    if (!synced || transition || conn != BLE_HS_CONN_HANDLE_NONE || ble_gap_adv_active()) {
+        return;
+    }
     int64_t remaining = adv_until - now_ms();
-    if (remaining <= 0) {
-        publish(BLE_IDLE);
+    bool adding = pairing();
+    if (remaining <= 0 || (!adding && !page_host_exists(&book, target))) {
+        advertising_finished();
         return;
     }
 
-    int rc = bonded ? ble_gap_wl_set(&peer, 1) : ble_gap_wl_set(NULL, 0);
+    ble_addr_t peer = adding ? (ble_addr_t){0} : ble_address(target);
+    int rc = ble_gap_wl_set(adding ? NULL : &peer, adding ? 0 : 1);
     if (rc != 0) {
         ESP_LOGE(TAG, "Set accept list: %d", rc);
-        publish(BLE_ERROR);
+        advertising_finished();
         return;
     }
+
     struct ble_hs_adv_fields fields = {
-        .flags = BLE_HS_ADV_F_BREDR_UNSUP | (bonded ? 0 : BLE_HS_ADV_F_DISC_GEN),
+        .flags = BLE_HS_ADV_F_BREDR_UNSUP | (adding ? BLE_HS_ADV_F_DISC_GEN : 0),
         .name = (const uint8_t *)PAGE_BLE_NAME,
         .name_len = sizeof(PAGE_BLE_NAME) - 1,
         .name_is_complete = 1,
@@ -263,37 +374,48 @@ static void advertise(void)
     if (rc == 0) {
         struct ble_gap_adv_params params = {
             .conn_mode = BLE_GAP_CONN_MODE_UND,
-            .disc_mode = bonded ? BLE_GAP_DISC_MODE_NON : BLE_GAP_DISC_MODE_GEN,
-            .filter_policy = bonded ? BLE_HCI_ADV_FILT_CONN : BLE_HCI_ADV_FILT_NONE,
-            .itvl_min = bonded ? 160 : 96,
-            .itvl_max = bonded ? 240 : 144,
+            .disc_mode = adding ? BLE_GAP_DISC_MODE_GEN : BLE_GAP_DISC_MODE_NON,
+            .filter_policy = adding ? BLE_HCI_ADV_FILT_NONE : BLE_HCI_ADV_FILT_CONN,
+            .itvl_min = adding ? 96 : 160,
+            .itvl_max = adding ? 144 : 240,
         };
         rc = ble_gap_adv_start(own_addr_type, NULL, (int32_t)remaining, &params, on_gap, NULL);
     }
     if (rc != 0) {
         ESP_LOGE(TAG, "Start advertising: %d", rc);
-        publish(BLE_ERROR);
+        advertising_finished();
         return;
     }
-    publish(bonded ? BLE_RECONNECTING : BLE_PAIRING);
+    publish(adding ? BLE_PAIRING : BLE_RECONNECTING);
 }
 
-static void open_window(void)
+static void schedule_advertising(void)
 {
-    adv_until = now_ms() + (bonded ? RECONNECT_MS : PAIR_MS);
-    advertise();
+    ble_npl_eventq_put(nimble_port_get_dflt_eventq(), &advertising_event);
 }
 
-static void erase_bond(void)
+static void open_window(bool manual)
 {
-    clearing = false;
-    if (!read_bond() || (bonded && ble_gap_unpair(&peer) != 0) ||
-        !read_bond() || bonded) {
-        ESP_LOGE(TAG, "Unable to clear BLE bond");
-        publish(BLE_ERROR);
-        return;
+    manual_window = manual;
+    adv_until = now_ms() + (pairing() ? PAIR_MS : (manual ? SWITCH_MS : RECONNECT_MS));
+    schedule_advertising();
+}
+
+static bool is_stored(const page_host_address_t *address)
+{
+    ble_addr_t peers[PAGE_HOST_COUNT];
+    int count;
+    if (!read_bonds(peers, &count)) {
+        return false;
     }
-    open_window();
+    for (int i = 0; i < count; ++i) {
+        page_host_address_t candidate = host_address(&peers[i]);
+        if (candidate.type == address->type &&
+            memcmp(candidate.bytes, address->bytes, sizeof(candidate.bytes)) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static int notify(uint16_t handle, const uint8_t *bytes, uint8_t size)
@@ -344,6 +466,119 @@ static void on_security_timeout(struct ble_npl_event *event)
     }
 }
 
+static bool forget_bond(uint8_t slot)
+{
+    ble_addr_t peer = ble_address(slot);
+    page_host_address_t address = book.hosts[slot].address;
+    int rc = ble_gap_unpair(&peer);
+    ble_addr_t peers[PAGE_HOST_COUNT];
+    int count;
+    if (!read_bonds(peers, &count)) {
+        return false;
+    }
+    for (int i = 0; i < count; ++i) {
+        page_host_address_t actual = host_address(&peers[i]);
+        if (actual.type == address.type && memcmp(actual.bytes, address.bytes, sizeof(actual.bytes)) == 0) {
+            ESP_LOGE(TAG, "Forget host: %d", rc);
+            return false;
+        }
+    }
+    page_host_remove(&book, slot);
+    save_host_book();
+    return true;
+}
+
+static void finish_transition(void)
+{
+    host_operation_t operation = transition & 0xff;
+    uint8_t slot = (transition >> 8) & 0xff;
+    page_host_label_t label = transition >> 16;
+    transition = HOST_CMD_NONE;
+
+    if (operation == HOST_CMD_FORGET) {
+        if (!forget_bond(slot)) {
+            publish(BLE_ERROR);
+            return;
+        }
+        if (target == slot || !page_host_exists(&book, target)) {
+            target = page_host_default(&book);
+        }
+        pair_slot = PAGE_HOST_NONE;
+        if (target == PAGE_HOST_NONE) {
+            publish(BLE_IDLE);
+        } else {
+            open_window(false);
+        }
+    } else if (operation == HOST_CMD_ADD) {
+        pair_slot = slot;
+        pair_label = label;
+        open_window(true);
+    } else if (operation == HOST_CMD_SELECT) {
+        target = slot;
+        pair_slot = PAGE_HOST_NONE;
+        open_window(true);
+    }
+}
+
+static void change_host(unsigned request)
+{
+    if (transition) {
+        return;
+    }
+    if (ble_gap_adv_active()) {
+        int rc = ble_gap_adv_stop();
+        if (rc != 0 && rc != BLE_HS_EALREADY) {
+            ESP_LOGE(TAG, "Stop advertising: %d", rc);
+            return;
+        }
+    }
+    transition = request;
+    session = (session + 1) & 0xffffff;
+    publish(BLE_SWITCHING);
+    if (conn != BLE_HS_CONN_HANDLE_NONE && active_report.id != 0 && encrypted) {
+        uint8_t zeros[REPORT_KEYBOARD_SIZE] = {0};
+        notify(input_handles[active_report.id], zeros, active_report.size);
+        ble_npl_callout_stop(&release_timer);
+        active_report = (page_report_t){0};
+    }
+    atomic_store(&pending_page, 0);
+    if (conn == BLE_HS_CONN_HANDLE_NONE) {
+        finish_transition();
+    } else {
+        int rc = ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
+        if (rc != 0 && rc != BLE_HS_EALREADY) {
+            ESP_LOGE(TAG, "Disconnect host: %d", rc);
+            transition = HOST_CMD_NONE;
+            publish(encrypted ? BLE_CONNECTED : BLE_SECURING);
+        }
+    }
+}
+
+static bool authorize_connection(const struct ble_gap_conn_desc *desc)
+{
+    page_host_address_t address = host_address(&desc->peer_id_addr);
+    if (pairing()) {
+        uint8_t settings = page_host_label_settings(pair_label, book.fallback);
+        if (!desc->sec_state.encrypted || !desc->sec_state.bonded || !is_stored(&address) ||
+            !page_host_add(&book, pair_slot, &address, pair_label, settings)) {
+            return false;
+        }
+        target = pair_slot;
+        pair_slot = PAGE_HOST_NONE;
+        page_host_connected(&book, target);
+        save_host_book();
+        return true;
+    }
+    if (!page_host_can_send(&book, target, &address, desc->sec_state.encrypted, desc->sec_state.bonded)) {
+        return false;
+    }
+    if (book.current != target) {
+        page_host_connected(&book, target);
+        save_host_book();
+    }
+    return true;
+}
+
 static int on_gap(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
@@ -351,15 +586,23 @@ static int on_gap(struct ble_gap_event *event, void *arg)
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT: {
         if (event->connect.status != 0) {
-            advertise();
+            schedule_advertising();
             break;
         }
         conn = event->connect.conn_handle;
+        if (transition) {
+            ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
+            break;
+        }
         session = (session + 1) & 0xffffff;
         publish(BLE_SECURING);
-        int64_t remaining = adv_until - now_ms();
-        if (remaining <= 0 || ble_gap_conn_find(conn, &desc) != 0 ||
-            (bonded && !same_peer(&desc.peer_id_addr))) {
+        if (now_ms() >= adv_until || ble_gap_conn_find(conn, &desc) != 0) {
+            ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
+            break;
+        }
+        page_host_address_t address = host_address(&desc.peer_id_addr);
+        uint8_t slot = page_host_find(&book, &address);
+        if (pairing() ? slot != PAGE_HOST_NONE : slot == PAGE_HOST_NONE || slot != target) {
             ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
             break;
         }
@@ -373,22 +616,20 @@ static int on_gap(struct ble_gap_event *event, void *arg)
         break;
     }
     case BLE_GAP_EVENT_ENC_CHANGE: {
-        if (conn != event->enc_change.conn_handle) {
+        if (conn != event->enc_change.conn_handle || transition) {
             break;
         }
-        if (clearing || event->enc_change.status != 0 || ble_gap_conn_find(conn, &desc) != 0 ||
-            !desc.sec_state.encrypted || !desc.sec_state.bonded ||
-            (bonded && !same_peer(&desc.peer_id_addr)) ||
-            !read_bond() || !bonded || !same_peer(&desc.peer_id_addr)) {
+        if (event->enc_change.status != 0 || ble_gap_conn_find(conn, &desc) != 0 ||
+            !authorize_connection(&desc)) {
             encrypted = false;
             publish(BLE_SECURING);
-            ble_gap_terminate(event->enc_change.conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+            ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
             break;
         }
         ble_npl_callout_stop(&security_timer);
+        manual_window = false;
         encrypted = true;
         publish(BLE_CONNECTED);
-        // The central can decline these parameters. Units are 1.25 ms and 10 ms.
         const struct ble_gap_upd_params params = {
             .itvl_min = 12, .itvl_max = 24, .latency = 9, .supervision_timeout = 400,
         };
@@ -396,24 +637,32 @@ static int on_gap(struct ble_gap_event *event, void *arg)
         break;
     }
     case BLE_GAP_EVENT_DISCONNECT: {
-        bool trusted_link = encrypted || event->disconnect.conn.sec_state.bonded;
+        bool was_connected = encrypted ||
+            (!manual_window && !pairing() && target == book.current && event->disconnect.conn.sec_state.bonded);
         ble_npl_callout_stop(&security_timer);
         ble_npl_callout_stop(&release_timer);
         conn = BLE_HS_CONN_HANDLE_NONE;
         subscriptions = 0;
         active_report = (page_report_t){0};
         encrypted = suspended = false;
-        publish(BLE_IDLE);
         atomic_store(&pending_page, 0);
-        if (clearing) {
-            erase_bond();
-        } else if (trusted_link && bonded) {
-            open_window();
+        if (transition) {
+            finish_transition();
+        } else if (was_connected) {
+            publish(BLE_RECONNECTING);
+            open_window(false);
         } else {
-            advertise();
+            schedule_advertising();
         }
         break;
     }
+    case BLE_GAP_EVENT_TERM_FAILURE:
+        if (transition && event->term_failure.conn_handle == conn) {
+            ESP_LOGW(TAG, "Host switch disconnect failed: %d", event->term_failure.status);
+            transition = HOST_CMD_NONE;
+            publish(encrypted ? BLE_CONNECTED : BLE_SECURING);
+        }
+        break;
     case BLE_GAP_EVENT_SUBSCRIBE: {
         if (event->subscribe.conn_handle != conn) {
             break;
@@ -426,16 +675,17 @@ static int on_gap(struct ble_gap_event *event, void *arg)
                 break;
             }
         }
-        if (encrypted) {
+        if (encrypted && !transition) {
             publish(BLE_CONNECTED);
         }
         break;
     }
     case BLE_GAP_EVENT_ADV_COMPLETE:
-        publish(BLE_IDLE);
+        if (conn == BLE_HS_CONN_HANDLE_NONE && !transition) {
+            advertising_finished();
+        }
         break;
     case BLE_GAP_EVENT_REPEAT_PAIRING:
-        // A host that forgot its keys needs a physical reset confirmation.
         return BLE_GAP_REPEAT_PAIRING_IGNORE;
     default:
         break;
@@ -443,10 +693,57 @@ static int on_gap(struct ble_gap_event *event, void *arg)
     return 0;
 }
 
+static void apply_host_command(unsigned request)
+{
+    host_operation_t operation = request & 0xff;
+    uint8_t slot = (request >> 8) & 0xff;
+    uint8_t value = request >> 16;
+    bool occupied = page_host_exists(&book, slot);
+
+    if (operation == HOST_CMD_CONFIG) {
+        if (occupied && slot == target && !pairing() && !transition) {
+            if (book.hosts[slot].settings != value) {
+                book.hosts[slot].settings = value;
+                save_host_book();
+            }
+            publish(page_ble_status().state);
+        } else if (slot == PAGE_HOST_NONE && target == PAGE_HOST_NONE) {
+            if (book.fallback != value) {
+                book.fallback = value;
+                save_host_book();
+            }
+            publish(page_ble_status().state);
+        }
+    } else if (operation == HOST_CMD_RENAME && occupied) {
+        book.hosts[slot].label = value;
+        save_host_book();
+        publish(page_ble_status().state);
+    } else if (operation == HOST_CMD_ADD) {
+        uint8_t free_slot = page_host_first_free(&book);
+        if (free_slot != PAGE_HOST_NONE) {
+            change_host(HOST_CMD_ADD | ((unsigned)free_slot << 8) | ((unsigned)value << 16));
+        }
+    } else if (operation == HOST_CMD_SELECT && occupied) {
+        if (slot != target || pairing() || !encrypted) {
+            change_host(request);
+        }
+    } else if (operation == HOST_CMD_FORGET && occupied) {
+        if (encrypted && !transition && slot != target) {
+            if (!forget_bond(slot)) {
+                ESP_LOGE(TAG, "Host %u was not removed", (unsigned)slot + 1);
+            }
+            publish(BLE_CONNECTED);
+        } else {
+            change_host(request);
+        }
+    }
+}
+
 static void on_command(struct ble_npl_event *event)
 {
     (void)event;
     unsigned requests = atomic_exchange(&commands, 0);
+    unsigned host_command = atomic_exchange(&pending_host, 0);
     if (!synced) {
         atomic_store(&pending_page, 0);
         return;
@@ -454,22 +751,12 @@ static void on_command(struct ble_npl_event *event)
     if (requests & CMD_BATTERY) {
         ble_svc_bas_battery_level_set((uint8_t)atomic_load(&battery_percent));
     }
-    if ((requests & CMD_CLEAR) && !clearing) {
-        clearing = true;
-        if (ble_gap_adv_active()) {
-            ble_gap_adv_stop();
-        }
-        adv_until = 0;
-        encrypted = false;
-        publish(BLE_SECURING);
-        if (conn == BLE_HS_CONN_HANDLE_NONE) {
-            erase_bond();
-        } else {
-            ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
-        }
-    } else if ((requests & CMD_RETRY) && !clearing && conn == BLE_HS_CONN_HANDLE_NONE &&
-               !ble_gap_adv_active()) {
-        open_window();
+    if (host_command) {
+        apply_host_command(host_command);
+    }
+    if ((requests & CMD_RETRY) && !transition && conn == BLE_HS_CONN_HANDLE_NONE &&
+        !ble_gap_adv_active() && (pairing() || page_host_exists(&book, target))) {
+        open_window(manual_window);
     }
 
     uint32_t command = atomic_load(&pending_page);
@@ -479,7 +766,11 @@ static void on_command(struct ble_npl_event *event)
     page_report_t report = page_report_for((page_profile_t)(command & REQUEST_PROFILE),
                                            (command & REQUEST_INVERT) != 0,
                                            (command & REQUEST_PREVIOUS) ? PAGE_PREV : PAGE_NEXT);
-    if (report.id == 0 || !encrypted || suspended || !(subscriptions & report_flag(report.id)) ||
+    if (report.id == 0 || !encrypted || transition || suspended ||
+        (command & (REQUEST_PROFILE | REQUEST_INVERT)) !=
+            ((current_settings() & ~PAGE_SETTINGS_INVERT) |
+             ((current_settings() & PAGE_SETTINGS_INVERT) ? REQUEST_INVERT : 0)) ||
+        !(subscriptions & report_flag(report.id)) ||
         command >> SESSION_SHIFT != session ||
         notify(input_handles[report.id], report.bytes, report.size) != 0) {
         atomic_store(&pending_page, 0);
@@ -501,7 +792,8 @@ static void on_reset(int reason)
     ESP_LOGW(TAG, "NimBLE reset: %d", reason);
     ble_npl_callout_stop(&security_timer);
     ble_npl_callout_stop(&release_timer);
-    synced = clearing = encrypted = suspended = false;
+    synced = encrypted = suspended = false;
+    transition = HOST_CMD_NONE;
     conn = BLE_HS_CONN_HANDLE_NONE;
     subscriptions = 0;
     active_report = (page_report_t){0};
@@ -511,18 +803,27 @@ static void on_reset(int reason)
 
 static void on_sync(void)
 {
-    if (ble_hs_util_ensure_addr(0) != 0 || ble_hs_id_infer_auto(0, &own_addr_type) != 0 ||
-        !read_bond()) {
+    if (ble_hs_util_ensure_addr(0) != 0 || ble_hs_id_infer_auto(0, &own_addr_type) != 0) {
         publish(BLE_ERROR);
         return;
     }
     synced = true;
     ble_svc_bas_battery_level_set((uint8_t)atomic_load(&battery_percent));
-    if (bonded || !boot_window_opened) {
-        boot_window_opened = true;
-        open_window();
+    if (!initialized) {
+        if (!load_hosts()) {
+            synced = false;
+            publish(BLE_ERROR);
+            return;
+        }
+        initialized = true;
+        target = page_host_default(&book);
+        if (target == PAGE_HOST_NONE) {
+            pair_slot = page_host_first_free(&book);
+            pair_label = HOST_OTHER;
+        }
+        open_window(false);
     } else {
-        advertise();
+        schedule_advertising();
     }
 }
 
@@ -535,8 +836,14 @@ static void host_task(void *arg)
 
 esp_err_t page_ble_start(void)
 {
-    esp_err_t err = nimble_port_init();
+    esp_err_t err = nvs_open("page_turner", NVS_READWRITE, &host_store);
     if (err != ESP_OK) {
+        return err;
+    }
+    nvs_get_u8(host_store, "settings", &legacy_settings);
+    err = nimble_port_init();
+    if (err != ESP_OK) {
+        nvs_close(host_store);
         return err;
     }
     ble_hs_cfg.sync_cb = on_sync;
@@ -554,11 +861,13 @@ esp_err_t page_ble_start(void)
     ble_svc_gap_device_appearance_set(0x03c1);
     if (ble_gatts_count_cfg(services) != 0 || ble_gatts_add_svcs(services) != 0) {
         nimble_port_deinit();
+        nvs_close(host_store);
         return ESP_FAIL;
     }
     ble_store_config_init();
     struct ble_npl_eventq *queue = nimble_port_get_dflt_eventq();
     ble_npl_event_init(&command_event, on_command, NULL);
+    ble_npl_event_init(&advertising_event, advertise, NULL);
     ble_npl_callout_init(&release_timer, queue, on_release, NULL);
     ble_npl_callout_init(&security_timer, queue, on_security_timeout, NULL);
     atomic_store(&started, true);
@@ -568,11 +877,10 @@ esp_err_t page_ble_start(void)
 
 page_ble_status_t page_ble_status(void)
 {
-    uint32_t value = atomic_load(&snapshot);
-    return (page_ble_status_t){
-        .state = value & SNAP_STATE, .bonded = (value & SNAP_BONDED) != 0,
-        .session = value >> SESSION_SHIFT,
-    };
+    portENTER_CRITICAL(&status_lock);
+    page_ble_status_t copy = snapshot;
+    portEXIT_CRITICAL(&status_lock);
+    return copy;
 }
 
 static void command(unsigned operation)
@@ -583,14 +891,51 @@ static void command(unsigned operation)
     }
 }
 
+static bool submit_host(host_operation_t operation, uint8_t slot, uint8_t value)
+{
+    if (!atomic_load(&started)) {
+        return false;
+    }
+    unsigned empty = 0;
+    unsigned request = (unsigned)operation | ((unsigned)slot << 8) | ((unsigned)value << 16);
+    if (!atomic_compare_exchange_strong(&pending_host, &empty, request)) {
+        return false;
+    }
+    command(0);
+    return true;
+}
+
+bool page_ble_select(uint8_t slot)
+{
+    return slot < PAGE_HOST_COUNT && submit_host(HOST_CMD_SELECT, slot, 0);
+}
+
+bool page_ble_add(page_host_label_t label)
+{
+    return label > HOST_EMPTY && label < HOST_LABEL_COUNT &&
+           submit_host(HOST_CMD_ADD, PAGE_HOST_NONE, label);
+}
+
+bool page_ble_forget(uint8_t slot)
+{
+    return slot < PAGE_HOST_COUNT && submit_host(HOST_CMD_FORGET, slot, 0);
+}
+
+bool page_ble_rename(uint8_t slot, page_host_label_t label)
+{
+    return slot < PAGE_HOST_COUNT && label > HOST_EMPTY && label < HOST_LABEL_COUNT &&
+           submit_host(HOST_CMD_RENAME, slot, label);
+}
+
+bool page_ble_configure(uint8_t slot, page_profile_t profile, bool invert)
+{
+    return (unsigned)profile < PROFILE_COUNT &&
+           submit_host(HOST_CMD_CONFIG, slot, (unsigned)profile | (invert ? PAGE_SETTINGS_INVERT : 0));
+}
+
 void page_ble_retry(void)
 {
     command(CMD_RETRY);
-}
-
-void page_ble_clear_pairing(void)
-{
-    command(CMD_CLEAR);
 }
 
 void page_ble_set_battery(unsigned percent)
@@ -602,10 +947,11 @@ void page_ble_set_battery(unsigned percent)
 
 bool page_ble_send(uint32_t expected_session, page_profile_t profile, bool invert, page_action_t action)
 {
-    uint32_t state = atomic_load(&snapshot);
+    page_ble_status_t status = page_ble_status();
     page_report_t report = page_report_for(profile, invert, action);
-    if (report.id == 0 || (state & SNAP_STATE) != BLE_CONNECTED || !(state & report_flag(report.id)) ||
-        state >> SESSION_SHIFT != expected_session) {
+    if (report.id == 0 || status.state != BLE_CONNECTED || !(status.reports & report_flag(report.id)) ||
+        status.session != expected_session || atomic_load(&pending_host) != 0 ||
+        status.settings != ((unsigned)profile | (invert ? PAGE_SETTINGS_INVERT : 0))) {
         return false;
     }
     uint32_t empty = 0;

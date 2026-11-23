@@ -8,7 +8,6 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "nvs.h"
 #include "nvs_flash.h"
 
 #include "page_ble.h"
@@ -17,11 +16,12 @@ namespace {
 constexpr gpio_num_t front_pin = GPIO_NUM_11;
 constexpr gpio_num_t side_pin = GPIO_NUM_12;
 constexpr uint32_t status_ms = 10000;
-constexpr uint32_t confirm_ms = 8000;
 constexpr uint32_t battery_interval_ms = 30000;
 constexpr uint32_t mode_menu_ms = 15000;
 
-enum class Menu { None, Mode, Variant, Pairing };
+enum class Menu { None, Mode, Variant, Devices, Manage, HostActions, Label, Forget };
+constexpr uint8_t add_item = PAGE_HOST_COUNT;
+constexpr uint8_t manage_item = PAGE_HOST_COUNT + 1;
 
 struct Mode {
     const char *title;
@@ -57,18 +57,76 @@ bool usb_ready;
 Menu menu = Menu::None;
 unsigned selected_mode;
 bool use_alternate;
+uint8_t host_choice;
+uint8_t managed_host;
+bool forget_action;
+bool rename_host;
+page_host_label_t label_choice = HOST_OTHER;
 bool low_battery;
 bool storage_error;
 bool bluetooth_error;
 uint32_t display_until;
 uint32_t menu_until;
 int battery_level = -1;
-nvs_handle_t config;
-bool config_open;
 
 bool before(uint32_t now, uint32_t deadline)
 {
     return static_cast<int32_t>(deadline - now) > 0;
+}
+
+void host_name(char *out, size_t length, uint8_t slot, uint8_t label)
+{
+    if (slot < PAGE_HOST_COUNT && label != HOST_EMPTY) {
+        std::snprintf(out, length, "%s %u", page_host_label_name(static_cast<page_host_label_t>(label)),
+                      static_cast<unsigned>(slot + 1));
+    } else {
+        std::snprintf(out, length, "%s", PAGE_BLE_NAME);
+    }
+}
+
+bool has_empty_slot(const page_ble_status_t &status)
+{
+    for (uint8_t label : status.labels) {
+        if (label == HOST_EMPTY) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool menu_item_visible(const page_ble_status_t &status, uint8_t item, bool device_menu)
+{
+    if (item < PAGE_HOST_COUNT) {
+        return status.labels[item] != HOST_EMPTY;
+    }
+    if (item == add_item) {
+        return device_menu && has_empty_slot(status);
+    }
+    for (uint8_t label : status.labels) {
+        if (label != HOST_EMPTY) {
+            return device_menu;
+        }
+    }
+    return false;
+}
+
+uint8_t next_host_choice(const page_ble_status_t &status, uint8_t from, bool device_menu)
+{
+    for (unsigned i = 1; i <= manage_item + 1U; ++i) {
+        uint8_t candidate = (from + i) % (manage_item + 1U);
+        if (menu_item_visible(status, candidate, device_menu)) {
+            return candidate;
+        }
+    }
+    return from;
+}
+
+void render_choice(unsigned row, bool selected, const char *text)
+{
+    auto &display = M5.Display;
+    display.setTextColor(selected ? TFT_CYAN : TFT_WHITE, TFT_BLACK);
+    display.drawString(selected ? ">" : " ", 8, 108 + row * 13);
+    display.drawString(text, 20, 108 + row * 13);
 }
 
 void show(page_ble_status_t status, uint32_t now)
@@ -85,9 +143,18 @@ void show(page_ble_status_t status, uint32_t now)
     } else if (bluetooth_error || status.state == BLE_ERROR) {
         title = "BLE ERROR";
         line = "See USB log";
-    } else if (menu == Menu::Pairing) {
+    } else if (menu == Menu::Forget) {
         title = "FORGET DEVICE?";
-        line = "A: Yes   B: Cancel";
+        line = "A: Forget  B: Cancel";
+    } else if (menu == Menu::Devices || menu == Menu::Manage ||
+               menu == Menu::HostActions || menu == Menu::Label) {
+        switch (menu) {
+        case Menu::Devices: title = "DEVICES"; break;
+        case Menu::Manage: title = "MANAGE"; break;
+        case Menu::HostActions: title = "DEVICE SETTINGS"; break;
+        default: title = rename_host ? "NAME DEVICE" : "ADD DEVICE"; break;
+        }
+        line = "A: Cycle   B: Select";
     } else if (menu == Menu::Mode || menu == Menu::Variant) {
         title = menu == Menu::Mode ? "SELECT MODE" : modes[selected_mode].title;
         line = "A: Cycle   B: Use";
@@ -100,7 +167,10 @@ void show(page_ble_status_t status, uint32_t now)
         case BLE_CONNECTED: title = low_battery ? "LOW BATTERY" : "CONNECTED";
             line = "A: Next   B: Back"; break;
         case BLE_IDLE: title = "DISCONNECTED";
-            line = status.bonded ? "Tap A or B to retry" : "Hold A+B for 5 sec"; break;
+            line = status.selected < PAGE_HOST_COUNT ? "Tap A or B to retry" : "Add via device menu"; break;
+        case BLE_SWITCHING: title = "SWITCHING"; break;
+        case BLE_RETRY_OR_BACK: title = "NO CONNECTION";
+            line = "A: Retry   B: Return"; break;
         case BLE_ERROR: break;
         }
     }
@@ -110,32 +180,68 @@ void show(page_ble_status_t status, uint32_t now)
     display.fillScreen(TFT_BLACK);
     display.setTextColor(TFT_WHITE, TFT_BLACK);
     display.setTextSize(1);
-    display.drawString(PAGE_BLE_NAME, 8, 15);
+    char device[20];
+    host_name(device, sizeof(device), status.selected, status.target_label);
+    display.drawString(device, 8, 15);
     display.setTextSize(1.5f);
     display.drawString(title, 8, 60);
     display.setTextSize(1);
     display.drawString(line, 8, 89);
-    if (menu == Menu::Mode) {
+    if (menu == Menu::Devices || menu == Menu::Manage) {
+        unsigned row = 0;
+        for (uint8_t item = 0; item <= manage_item; ++item) {
+            if (!menu_item_visible(status, item, menu == Menu::Devices)) {
+                continue;
+            }
+            if (item < PAGE_HOST_COUNT) {
+                char name[20];
+                host_name(name, sizeof(name), item, status.labels[item]);
+                render_choice(row++, host_choice == item, name);
+                if (item == status.selected && status.state == BLE_CONNECTED) {
+                    display.drawString("*", 102, 108 + (row - 1) * 13);
+                }
+            } else {
+                render_choice(row++, host_choice == item, item == add_item ? "Add device" : "Manage devices");
+            }
+        }
+    } else if (menu == Menu::HostActions) {
+        render_choice(0, !forget_action, "Name");
+        render_choice(1, forget_action, "Forget");
+    } else if (menu == Menu::Label) {
+        for (unsigned label = HOST_OTHER; label < HOST_LABEL_COUNT; ++label) {
+            const auto candidate = static_cast<page_host_label_t>(label);
+            render_choice(label - HOST_OTHER, candidate == label_choice, page_host_label_name(candidate));
+        }
+    } else if (menu == Menu::Forget) {
+        if (managed_host < PAGE_HOST_COUNT) {
+            char name[20];
+            host_name(name, sizeof(name), managed_host, status.labels[managed_host]);
+            display.drawString(name, 8, 118);
+        }
+    } else if (menu == Menu::Mode) {
         for (unsigned i = 0; i < mode_count; ++i) {
-            display.setTextColor(i == selected_mode ? TFT_CYAN : TFT_WHITE, TFT_BLACK);
-            display.drawString(i == selected_mode ? ">" : " ", 8, 111 + i * 14);
-            display.drawString(modes[i].title, 22, 111 + i * 14);
+            render_choice(i, i == selected_mode, modes[i].title);
         }
     } else if (menu == Menu::Variant) {
         const Mode &mode = modes[selected_mode];
-        display.setTextColor(!use_alternate ? TFT_CYAN : TFT_WHITE, TFT_BLACK);
-        display.drawString(mode.primary_label, 16, 118);
-        display.setTextColor(use_alternate ? TFT_CYAN : TFT_WHITE, TFT_BLACK);
-        display.drawString(mode.alternate_label, 16, 140);
+        render_choice(0, !use_alternate, mode.primary_label);
+        render_choice(1, use_alternate, mode.alternate_label);
     } else if (menu == Menu::None) {
         if (status.state == BLE_PAIRING) {
             display.drawString("Open host Bluetooth", 8, 104);
+        } else if (status.state == BLE_RETRY_OR_BACK && status.previous < PAGE_HOST_COUNT) {
+            char name[20];
+            host_name(name, sizeof(name), status.previous, status.labels[status.previous]);
+            display.drawString(name, 8, 110);
         }
-        display.drawString("Hold A+B: mode", 8, 156);
+        display.drawString("A+B 1s: mode", 8, 140);
+        display.drawString("A+B 3s: devices", 8, 156);
     }
     display.setTextColor(TFT_WHITE, TFT_BLACK);
     display.drawString(page_profile_name(profile), 8, 190);
-    if (battery_level >= 0) {
+    if (status.storage_failed) {
+        display.drawString("Settings not saved", 8, 207);
+    } else if (battery_level >= 0) {
         char description[20];
         std::snprintf(description, sizeof(description), "Battery %d%%", battery_level);
         display.drawString(description, 8, 207);
@@ -163,47 +269,18 @@ void update_battery()
     page_ble_set_battery(static_cast<unsigned>(battery_level));
 }
 
-esp_err_t load_config()
-{
-    esp_err_t result = nvs_flash_init();
-    if (result != ESP_OK) {
-        return result;
-    }
-    result = nvs_open("page_turner", NVS_READWRITE, &config);
-    if (result != ESP_OK) {
-        return result;
-    }
-    config_open = true;
-    uint8_t value;
-    // Store both choices in one key so interrupted writes cannot split them.
-    if (nvs_get_u8(config, "settings", &value) == ESP_OK && (value & 0x7f) < PROFILE_COUNT) {
-        profile = static_cast<page_profile_t>(value & 0x7f);
-        inverted = (value & 0x80) != 0;
-    }
-    return ESP_OK;
-}
-
 bool save_config(page_profile_t next_profile, bool next_inverted)
 {
-    if (!config_open) {
-        std::puts("Settings unavailable");
+    auto status = page_ble_status();
+    if (status.state == BLE_STARTING || status.state == BLE_SWITCHING ||
+        status.state == BLE_SECURING || status.state == BLE_ERROR) {
         return false;
     }
-    if (next_profile == profile && next_inverted == inverted) {
-        return true;
+    uint8_t slot = status.selected;
+    if (slot >= PAGE_HOST_COUNT || status.labels[slot] == HOST_EMPTY) {
+        slot = PAGE_HOST_NONE;
     }
-    uint8_t value = static_cast<uint8_t>(next_profile) | (next_inverted ? 0x80 : 0);
-    esp_err_t err = nvs_set_u8(config, "settings", value);
-    if (err == ESP_OK) {
-        err = nvs_commit(config);
-    }
-    if (err != ESP_OK) {
-        std::printf("Settings write failed: %s\n", esp_err_to_name(err));
-        return false;
-    }
-    profile = next_profile;
-    inverted = next_inverted;
-    return true;
+    return page_ble_configure(slot, next_profile, next_inverted);
 }
 
 void choose_mode(page_profile_t next_profile)
@@ -213,18 +290,73 @@ void choose_mode(page_profile_t next_profile)
     }
 }
 
-void handle_menu_button(page_action_t action, uint32_t now)
+void open_devices(const page_ble_status_t &status, uint32_t now)
+{
+    menu_until = now + mode_menu_ms;
+    menu = Menu::Devices;
+    if (status.previous < PAGE_HOST_COUNT && status.labels[status.previous] != HOST_EMPTY) {
+        host_choice = status.previous;
+    } else if (status.selected < PAGE_HOST_COUNT && status.labels[status.selected] != HOST_EMPTY) {
+        host_choice = status.selected;
+    } else {
+        host_choice = next_host_choice(status, manage_item, true);
+    }
+}
+
+void handle_menu_button(page_action_t action, const page_ble_status_t &status, uint32_t now)
 {
     bool front = action == PAGE_NEXT;
+    menu_until = now + mode_menu_ms;
     switch (menu) {
-    case Menu::Pairing:
+    case Menu::Devices:
         if (front) {
-            page_ble_clear_pairing();
+            host_choice = next_host_choice(status, host_choice, true);
+        } else if (host_choice == add_item && has_empty_slot(status)) {
+            rename_host = false;
+            label_choice = HOST_OTHER;
+            menu = Menu::Label;
+        } else if (host_choice == manage_item) {
+            host_choice = next_host_choice(status, manage_item, false);
+            menu = Menu::Manage;
+        } else if (host_choice < PAGE_HOST_COUNT && status.labels[host_choice] != HOST_EMPTY &&
+                   page_ble_select(host_choice)) {
+            menu = Menu::None;
         }
-        menu = Menu::None;
+        break;
+    case Menu::Manage:
+        if (front) {
+            host_choice = next_host_choice(status, host_choice, false);
+        } else if (host_choice < PAGE_HOST_COUNT) {
+            managed_host = host_choice;
+            forget_action = false;
+            menu = Menu::HostActions;
+        }
+        break;
+    case Menu::HostActions:
+        if (front) {
+            forget_action = !forget_action;
+        } else if (forget_action) {
+            menu = Menu::Forget;
+        } else {
+            rename_host = true;
+            label_choice = static_cast<page_host_label_t>(status.labels[managed_host]);
+            menu = Menu::Label;
+        }
+        break;
+    case Menu::Label:
+        if (front) {
+            label_choice = static_cast<page_host_label_t>(
+                label_choice + 1 < HOST_LABEL_COUNT ? label_choice + 1 : HOST_OTHER);
+        } else if (rename_host ? page_ble_rename(managed_host, label_choice) : page_ble_add(label_choice)) {
+            menu = Menu::None;
+        }
+        break;
+    case Menu::Forget:
+        if (!front || page_ble_forget(managed_host)) {
+            menu = Menu::None;
+        }
         break;
     case Menu::Mode: {
-        menu_until = now + mode_menu_ms;
         if (front) {
             selected_mode = (selected_mode + 1) % mode_count;
         } else {
@@ -239,7 +371,6 @@ void handle_menu_button(page_action_t action, uint32_t now)
         break;
     }
     case Menu::Variant: {
-        menu_until = now + mode_menu_ms;
         if (front) {
             use_alternate = !use_alternate;
         } else {
@@ -261,8 +392,10 @@ bool handle_command(const char *line)
     }
     if (std::strcmp(line, "status") == 0) {
         auto status = page_ble_status();
-        std::printf("Mode %s, inverted %s, bonded %s, connected %s, battery %d%%\n",
-                    page_profile_name(profile), inverted ? "yes" : "no", status.bonded ? "yes" : "no",
+        char device[20];
+        host_name(device, sizeof(device), status.selected, status.target_label);
+        std::printf("%s, mode %s, inverted %s, connected %s, battery %d%%\n", device,
+                    page_profile_name(profile), inverted ? "yes" : "no",
                     status.state == BLE_CONNECTED ? "yes" : "no", battery_level);
         return false;
     }
@@ -361,7 +494,7 @@ extern "C" void app_main()
     usb_ready = usb_serial_jtag_driver_install(&usb_config) == ESP_OK;
     std::printf("StickS3 Page %s. Type help.\n", esp_app_get_description()->version);
 
-    esp_err_t err = load_config();
+    esp_err_t err = nvs_flash_init();
     storage_error = err != ESP_OK;
     if (storage_error) {
         std::printf("NVS unavailable: %s\n", esp_err_to_name(err));
@@ -385,8 +518,13 @@ extern "C" void app_main()
     for (;;) {
         uint32_t now = static_cast<uint32_t>(esp_timer_get_time() / 1000);
         page_ble_status_t status = page_ble_status();
-        bool redraw = status.state != previous.state || status.bonded != previous.bonded;
+        bool redraw = status.state != previous.state || status.selected != previous.selected ||
+                      status.target_label != previous.target_label || status.settings != previous.settings ||
+                      status.storage_failed != previous.storage_failed ||
+                      std::memcmp(status.labels, previous.labels, sizeof(status.labels)) != 0;
         previous = status;
+        profile = static_cast<page_profile_t>(status.settings & ~PAGE_SETTINGS_INVERT);
+        inverted = (status.settings & PAGE_SETTINGS_INVERT) != 0;
 
         if (now - last_battery_update >= battery_interval_ms) {
             last_battery_update = now;
@@ -408,14 +546,8 @@ extern "C" void app_main()
             press_inverted = inverted;
         }
         page_action_t action = page_buttons_poll(&buttons, raw, now);
-        if (action == PAGE_PAIR_GESTURE) {
-            menu = Menu::None;
-            if (status.bonded) {
-                menu_until = now + confirm_ms;
-                menu = Menu::Pairing;
-            } else {
-                page_ble_retry();
-            }
+        if (action == PAGE_DEVICE_GESTURE) {
+            open_devices(status, now);
             redraw = true;
         } else if (action == PAGE_MODE_GESTURE) {
             if (menu == Menu::None) {
@@ -428,15 +560,22 @@ extern "C" void app_main()
             redraw = true;
         } else if ((action == PAGE_NEXT || action == PAGE_PREV) && press_menu == menu) {
             if (menu != Menu::None) {
-                handle_menu_button(action, now);
+                handle_menu_button(action, status, now);
                 redraw = true;
             } else if (press_profile == profile && press_inverted == inverted) {
                 if (press_status.state == BLE_CONNECTED && status.state == BLE_CONNECTED) {
                     page_ble_send(press_status.session, profile, inverted, action);
-                } else {
-                    if (status.bonded && (status.state == BLE_IDLE || status.state == BLE_ERROR)) {
+                } else if (press_status.state == BLE_RETRY_OR_BACK && status.state == BLE_RETRY_OR_BACK) {
+                    if (action == PAGE_PREV) {
+                        page_ble_select(status.previous);
+                    } else {
                         page_ble_retry();
                     }
+                    redraw = true;
+                } else if (press_status.state == BLE_IDLE && status.state == BLE_IDLE) {
+                    page_ble_retry();
+                    redraw = true;
+                } else {
                     redraw = true;
                 }
             }
