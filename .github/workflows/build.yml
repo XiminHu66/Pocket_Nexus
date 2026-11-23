@@ -25,6 +25,11 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
+    - name: Test BLE page turner controls
+      working-directory: firmware/page-turner
+      run: |
+        cc -std=c11 -Wall -Wextra -Werror -I main main/controls.c tests/test_controls.c -o "$RUNNER_TEMP/page-turner-test"
+        "$RUNNER_TEMP/page-turner-test"
     - name: Install build tools
       run: pip install --upgrade platformio pillow
     - name: Generate RGB565 screensaver

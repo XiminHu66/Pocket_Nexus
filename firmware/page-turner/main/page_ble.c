@@ -18,17 +18,25 @@ void ble_store_config_init(void);
 enum {
     PAIR_MS = 90000, RECONNECT_MS = 60000, SECURITY_MS = 12000,
     RELEASE_MS = 30, RELEASE_RETRY_MS = 15, MAX_RELEASE_TRIES = 4,
-    SNAP_STATE = 0x07, SNAP_BONDED = 0x08, SNAP_KBD = 0x10, SNAP_CONSUMER = 0x20,
+    SNAP_STATE = 0x07, SNAP_BONDED = 0x08, REPORT_FLAG_SHIFT = 3,
+    REQUEST_PROFILE = 0x07, REQUEST_INVERT = 0x08, REQUEST_PREVIOUS = 0x10, REQUEST_VALID = 0x20,
     SESSION_SHIFT = 8, CMD_RETRY = 1, CMD_CLEAR = 2, CMD_BATTERY = 4,
 };
+
+_Static_assert(PROFILE_COUNT <= REQUEST_PROFILE + 1, "HID request profile must fit");
 
 static const char *TAG = "page_ble";
 // USB identity of the ESP32-S3's built-in serial/JTAG interface on this board.
 static const uint8_t pnp_id[] = { 2, 0x3a, 0x30, 0x01, 0x10, 0x01, 0x00 };
 static const char manufacturer[] = "M5Stack";
 static const uint8_t hid_info[] = { 0x11, 0x01, 0, 0 };
-static const uint8_t keyboard_ref[] = { REPORT_KEYBOARD, 1 };
-static const uint8_t consumer_ref[] = { REPORT_CONSUMER, 1 };
+struct input_report {
+    uint8_t reference[2];
+    uint8_t size;
+};
+static const struct input_report keyboard_input = { { REPORT_KEYBOARD, 1 }, REPORT_KEYBOARD_SIZE };
+static const struct input_report consumer_input = { { REPORT_CONSUMER, 1 }, REPORT_CONSUMER_SIZE };
+static const struct input_report mouse_input = { { REPORT_MOUSE, 1 }, REPORT_MOUSE_SIZE };
 static const uint8_t report_map[] = {
     // Keyboard, standard 8-byte input (modifiers, reserved, six usage slots).
     0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x85, REPORT_KEYBOARD,
@@ -42,6 +50,14 @@ static const uint8_t report_map[] = {
     0x09, 0xe9, 0x09, 0xea, 0x15, 0x00, 0x25, 0x01,
     0x75, 0x01, 0x95, 0x02, 0x81, 0x02,
     0x75, 0x06, 0x95, 0x01, 0x81, 0x01, 0xc0,
+    // Mouse: button byte, signed relative X, Y and wheel. Only wheel is emitted.
+    0x05, 0x01, 0x09, 0x02, 0xa1, 0x01, 0x85, REPORT_MOUSE,
+    0x09, 0x01, 0xa1, 0x00,
+    0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01,
+    0x95, 0x03, 0x75, 0x01, 0x81, 0x02,
+    0x95, 0x01, 0x75, 0x05, 0x81, 0x01,
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38, 0x15, 0x81,
+    0x25, 0x7f, 0x75, 0x08, 0x95, 0x03, 0x81, 0x06, 0xc0, 0xc0,
 };
 
 // The BLE host task owns the link and timers. The application sees an atomic
@@ -54,7 +70,7 @@ static _Atomic bool started;
 static struct ble_npl_event command_event;
 static struct ble_npl_callout release_timer, security_timer;
 static uint16_t conn = BLE_HS_CONN_HANDLE_NONE;
-static uint16_t keyboard_handle, consumer_handle;
+static uint16_t input_handles[REPORT_MOUSE + 1];
 static uint32_t session;
 static int64_t adv_until, security_until, release_at;
 static uint8_t own_addr_type;
@@ -66,6 +82,11 @@ static bool bonded, encrypted, suspended, synced, clearing, boot_window_opened;
 
 static int on_gap(struct ble_gap_event *event, void *arg);
 static void advertise(void);
+
+static unsigned report_flag(uint8_t id)
+{
+    return 1U << (id + REPORT_FLAG_SHIFT);
+}
 
 static void publish(page_ble_state_t state)
 {
@@ -106,10 +127,10 @@ static int hid_access(uint16_t handle, uint16_t attribute, struct ble_gatt_acces
         return 0;
     }
     case 0x2a4d: {
-        const uint8_t *reference = arg;
-        uint8_t zeros[8] = {0};
-        const uint8_t *bytes = active_report.id == reference[0] ? active_report.bytes : zeros;
-        return append_value(ctxt->om, bytes, reference[0] == REPORT_KEYBOARD ? 8 : 1);
+        const struct input_report *input = arg;
+        uint8_t zeros[REPORT_KEYBOARD_SIZE] = {0};
+        const uint8_t *bytes = active_report.id == input->reference[0] ? active_report.bytes : zeros;
+        return append_value(ctxt->om, bytes, input->size);
     }
     default:
         return BLE_ATT_ERR_UNLIKELY;
@@ -121,7 +142,8 @@ static int report_reference(uint16_t conn_handle, uint16_t attribute,
 {
     (void)conn_handle;
     (void)attribute;
-    return append_value(ctxt->om, arg, 2);
+    const struct input_report *input = arg;
+    return append_value(ctxt->om, input->reference, sizeof(input->reference));
 }
 
 static int device_info_access(uint16_t handle, uint16_t attribute,
@@ -159,19 +181,27 @@ static const struct ble_gatt_svc_def services[] = {
             { .uuid = BLE_UUID16_DECLARE(0x2a4c), .access_cb = hid_access,
               .flags = BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC },
             { .uuid = BLE_UUID16_DECLARE(0x2a4d), .access_cb = hid_access,
-              .arg = (void *)keyboard_ref, .val_handle = &keyboard_handle,
+              .arg = (void *)&keyboard_input, .val_handle = &input_handles[REPORT_KEYBOARD],
               .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_NOTIFY,
               .descriptors = (struct ble_gatt_dsc_def[]) {
                   { .uuid = BLE_UUID16_DECLARE(0x2908), .access_cb = report_reference,
-                    .att_flags = BLE_ATT_F_READ | BLE_ATT_F_READ_ENC, .arg = (void *)keyboard_ref },
+                    .att_flags = BLE_ATT_F_READ | BLE_ATT_F_READ_ENC, .arg = (void *)&keyboard_input },
                   {0},
               } },
             { .uuid = BLE_UUID16_DECLARE(0x2a4d), .access_cb = hid_access,
-              .arg = (void *)consumer_ref, .val_handle = &consumer_handle,
+              .arg = (void *)&consumer_input, .val_handle = &input_handles[REPORT_CONSUMER],
               .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_NOTIFY,
               .descriptors = (struct ble_gatt_dsc_def[]) {
                   { .uuid = BLE_UUID16_DECLARE(0x2908), .access_cb = report_reference,
-                    .att_flags = BLE_ATT_F_READ | BLE_ATT_F_READ_ENC, .arg = (void *)consumer_ref },
+                    .att_flags = BLE_ATT_F_READ | BLE_ATT_F_READ_ENC, .arg = (void *)&consumer_input },
+                  {0},
+              } },
+            { .uuid = BLE_UUID16_DECLARE(0x2a4d), .access_cb = hid_access,
+              .arg = (void *)&mouse_input, .val_handle = &input_handles[REPORT_MOUSE],
+              .flags = BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_READ_ENC | BLE_GATT_CHR_F_NOTIFY,
+              .descriptors = (struct ble_gatt_dsc_def[]) {
+                  { .uuid = BLE_UUID16_DECLARE(0x2908), .access_cb = report_reference,
+                    .att_flags = BLE_ATT_F_READ | BLE_ATT_F_READ_ENC, .arg = (void *)&mouse_input },
                   {0},
               } },
             {0},
@@ -266,11 +296,6 @@ static void erase_bond(void)
     open_window();
 }
 
-static uint16_t report_handle(uint8_t id)
-{
-    return id == REPORT_KEYBOARD ? keyboard_handle : consumer_handle;
-}
-
 static int notify(uint16_t handle, const uint8_t *bytes, uint8_t size)
 {
     struct os_mbuf *buffer = ble_hs_mbuf_from_flat(bytes, size);
@@ -288,8 +313,8 @@ static void on_release(struct ble_npl_event *event)
         ble_npl_callout_reset(&release_timer, ble_npl_time_ms_to_ticks32((uint32_t)remaining + 5));
         return;
     }
-    uint8_t zeros[8] = {0};
-    int rc = notify(report_handle(active_report.id), zeros, active_report.size);
+    uint8_t zeros[REPORT_KEYBOARD_SIZE] = {0};
+    int rc = notify(input_handles[active_report.id], zeros, active_report.size);
     if (rc != 0 && ++release_tries < MAX_RELEASE_TRIES) {
         release_at = now_ms() + RELEASE_RETRY_MS;
         ble_npl_callout_reset(&release_timer, ble_npl_time_ms_to_ticks32(RELEASE_RETRY_MS));
@@ -394,11 +419,12 @@ static int on_gap(struct ble_gap_event *event, void *arg)
             break;
         }
         uint16_t attr = event->subscribe.attr_handle;
-        unsigned flag = attr == keyboard_handle ? SNAP_KBD : attr == consumer_handle ? SNAP_CONSUMER : 0;
-        if (event->subscribe.cur_notify) {
-            subscriptions |= flag;
-        } else {
-            subscriptions &= ~flag;
+        for (uint8_t id = REPORT_KEYBOARD; id <= REPORT_MOUSE; ++id) {
+            if (input_handles[id] == attr) {
+                unsigned flag = report_flag(id);
+                subscriptions = event->subscribe.cur_notify ? subscriptions | flag : subscriptions & ~flag;
+                break;
+            }
         }
         if (encrypted) {
             publish(BLE_CONNECTED);
@@ -450,19 +476,24 @@ static void on_command(struct ble_npl_event *event)
     if (command == 0 || active_report.id != 0) {
         return;
     }
-    page_report_t report = page_report_for((page_profile_t)(command & 3), (command & 4) != 0,
-                                           (page_action_t)((command >> 3) & 3));
-    unsigned flag = report.id == REPORT_KEYBOARD ? SNAP_KBD : SNAP_CONSUMER;
-    if (report.id != 0 && encrypted && !suspended && (subscriptions & flag) &&
-        command >> SESSION_SHIFT == session &&
-        notify(report_handle(report.id), report.bytes, report.size) == 0) {
-        active_report = report;
-        release_tries = 0;
-        release_at = now_ms() + RELEASE_MS;
-        ble_npl_callout_reset(&release_timer, ble_npl_time_ms_to_ticks32(RELEASE_MS));
-    } else {
+    page_report_t report = page_report_for((page_profile_t)(command & REQUEST_PROFILE),
+                                           (command & REQUEST_INVERT) != 0,
+                                           (command & REQUEST_PREVIOUS) ? PAGE_PREV : PAGE_NEXT);
+    if (report.id == 0 || !encrypted || suspended || !(subscriptions & report_flag(report.id)) ||
+        command >> SESSION_SHIFT != session ||
+        notify(input_handles[report.id], report.bytes, report.size) != 0) {
         atomic_store(&pending_page, 0);
+        return;
     }
+    if (report.id == REPORT_MOUSE) {
+        // Relative wheel movement is a one-shot report with no pressed buttons.
+        atomic_store(&pending_page, 0);
+        return;
+    }
+    active_report = report;
+    release_tries = 0;
+    release_at = now_ms() + RELEASE_MS;
+    ble_npl_callout_reset(&release_timer, ble_npl_time_ms_to_ticks32(RELEASE_MS));
 }
 
 static void on_reset(int reason)
@@ -572,14 +603,14 @@ void page_ble_set_battery(unsigned percent)
 bool page_ble_send(uint32_t expected_session, page_profile_t profile, bool invert, page_action_t action)
 {
     uint32_t state = atomic_load(&snapshot);
-    unsigned flag = profile == PROFILE_VOLUME ? SNAP_CONSUMER : SNAP_KBD;
-    if ((action != PAGE_NEXT && action != PAGE_PREV) || (unsigned)profile >= PROFILE_COUNT ||
-        (state & SNAP_STATE) != BLE_CONNECTED || !(state & flag) ||
+    page_report_t report = page_report_for(profile, invert, action);
+    if (report.id == 0 || (state & SNAP_STATE) != BLE_CONNECTED || !(state & report_flag(report.id)) ||
         state >> SESSION_SHIFT != expected_session) {
         return false;
     }
     uint32_t empty = 0;
-    uint32_t request = (expected_session << SESSION_SHIFT) | (action << 3) | (invert ? 4 : 0) | profile;
+    uint32_t request = (expected_session << SESSION_SHIFT) | REQUEST_VALID | (unsigned)profile |
+                       (action == PAGE_PREV ? REQUEST_PREVIOUS : 0) | (invert ? REQUEST_INVERT : 0);
     if (!atomic_compare_exchange_strong(&pending_page, &empty, request)) {
         return false;
     }
