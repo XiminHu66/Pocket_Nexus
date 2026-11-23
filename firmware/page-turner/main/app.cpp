@@ -151,7 +151,7 @@ void show(page_ble_status_t status, uint32_t now)
         switch (menu) {
         case Menu::Devices: title = "DEVICES"; break;
         case Menu::Manage: title = "MANAGE"; break;
-        case Menu::HostActions: title = "DEVICE SETTINGS"; break;
+        case Menu::HostActions: title = "HOST SETTINGS"; break;
         default: title = rename_host ? "NAME DEVICE" : "ADD DEVICE"; break;
         }
         line = "A: Cycle   B: Select";
