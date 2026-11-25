@@ -39,8 +39,8 @@ constexpr Mode modes[] = {
     {"PPT", {{PROFILE_PPT, ""}}},
     {"MANGA", {{PROFILE_MANGA, "Page arrows"}, {PROFILE_MANGA_SCROLL, "Page Up / Down"}}},
     {"VIDEO", {{PROFILE_VIDEO_KEYS, "PC arrow keys"}, {PROFILE_VIDEO_WHEEL, "Mouse wheel"}}},
-    {"IPHONE", {{PROFILE_IPHONE_VERTICAL, "Shorts swipe"}, {PROFILE_IPHONE_HORIZONTAL, "Horizontal swipe"},
-                {PROFILE_IPHONE_SCROLL, "Reading scroll"}}},
+    {"IPHONE", {{PROFILE_IPHONE_VERTICAL, "Shorts swipe"}, {PROFILE_IPHONE_SCROLL, "Reading scroll"},
+                {PROFILE_IPHONE_HORIZONTAL, "Horizontal swipe"}}},
 };
 constexpr unsigned mode_count = sizeof(modes) / sizeof(modes[0]);
 
@@ -134,6 +134,11 @@ void render_choice(unsigned row, bool selected, const char *text)
     display.setTextColor(selected ? TFT_CYAN : TFT_WHITE, TFT_BLACK);
     display.drawString(selected ? ">" : " ", 8, 108 + row * 13);
     display.drawString(text, 20, 108 + row * 13);
+}
+
+bool has_iphone_modes(const page_ble_status_t &status)
+{
+    return status.target_label == HOST_IPHONE || page_swipe_for(profile, false, PAGE_NEXT) != SWIPE_NONE;
 }
 
 bool needs_phone_pointer(const page_ble_status_t &status)
@@ -254,8 +259,14 @@ void show(page_ble_status_t status, uint32_t now)
             host_name(name, sizeof(name), status.previous, status.labels[status.previous]);
             display.drawString(name, 8, 110);
         }
-        display.drawString("A+B 1s: mode", 8, 140);
-        display.drawString("A+B 3s: devices", 8, 156);
+        if (has_iphone_modes(status)) {
+            display.drawString("A+B 1s: iPhone mode", 8, 140);
+            display.drawString("A+B 2s: all modes", 8, 156);
+            display.drawString("A+B 3s: devices", 8, 172);
+        } else {
+            display.drawString("A+B 1s: mode", 8, 140);
+            display.drawString("A+B 3s: devices", 8, 156);
+        }
     }
     display.setTextColor(TFT_WHITE, TFT_BLACK);
     display.drawString(page_profile_name(profile), 8, 190);
@@ -289,9 +300,8 @@ void update_battery()
     page_ble_set_battery(static_cast<unsigned>(battery_level));
 }
 
-bool save_config(page_profile_t next_profile, bool next_inverted)
+bool save_config(page_profile_t next_profile, bool next_inverted, const page_ble_status_t &status)
 {
-    auto status = page_ble_status();
     if (status.state == BLE_STARTING || status.state == BLE_SWITCHING ||
         status.state == BLE_SECURING || status.state == BLE_ERROR) {
         return false;
@@ -303,9 +313,9 @@ bool save_config(page_profile_t next_profile, bool next_inverted)
     return page_ble_configure(slot, next_profile, next_inverted);
 }
 
-void choose_mode(page_profile_t next_profile)
+void choose_mode(page_profile_t next_profile, const page_ble_status_t &status)
 {
-    if (save_config(next_profile, inverted)) {
+    if (save_config(next_profile, inverted, status)) {
         menu = Menu::None;
     }
 }
@@ -382,7 +392,7 @@ void handle_menu_button(page_action_t action, const page_ble_status_t &status, u
         } else {
             const auto &variants = modes[selected_mode].variants;
             if (variants.size() == 1) {
-                choose_mode(variants.begin()->profile);
+                choose_mode(variants.begin()->profile, status);
             } else {
                 selected_variant = 0;
                 for (unsigned i = 0; i < variants.size(); ++i) {
@@ -401,7 +411,7 @@ void handle_menu_button(page_action_t action, const page_ble_status_t &status, u
         if (front) {
             selected_variant = (selected_variant + 1) % variants.size();
         } else {
-            choose_mode(variants.begin()[selected_variant].profile);
+            choose_mode(variants.begin()[selected_variant].profile, status);
         }
         break;
     }
@@ -437,7 +447,7 @@ bool handle_command(const char *line)
     };
     for (const auto &shortcut : shortcuts) {
         if (std::strcmp(line, shortcut.command) == 0) {
-            if (!save_config(shortcut.target, inverted)) {
+            if (!save_config(shortcut.target, inverted, page_ble_status())) {
                 return false;
             }
             menu = Menu::None;
@@ -450,7 +460,7 @@ bool handle_command(const char *line)
         std::puts("Unknown command. Type help.");
         return false;
     }
-    if (!save_config(profile, invert_on)) {
+    if (!save_config(profile, invert_on, page_ble_status())) {
         return false;
     }
     std::printf("Inverted %s\n", inverted ? "yes" : "no");
@@ -579,13 +589,18 @@ extern "C" void app_main()
         if (action == PAGE_DEVICE_GESTURE) {
             open_devices(status, now);
             redraw = true;
-        } else if (action == PAGE_MODE_GESTURE) {
-            if (menu == Menu::None) {
+        } else if (action == PAGE_MODE_GESTURE || action == PAGE_MODE_MENU_GESTURE) {
+            if (menu != Menu::None || press_menu != Menu::None) {
+                menu = Menu::None;
+            } else if (action == PAGE_MODE_GESTURE && has_iphone_modes(status)) {
+                if (status.session == press_status.session && status.selected == press_status.selected &&
+                    profile == press_profile && inverted == press_inverted) {
+                    choose_mode(page_iphone_next_profile(profile), status);
+                }
+            } else {
                 selected_mode = mode_index(profile);
                 menu_until = now + mode_menu_ms;
                 menu = Menu::Mode;
-            } else {
-                menu = Menu::None;
             }
             redraw = true;
         } else if ((action == PAGE_NEXT || action == PAGE_PREV) && press_menu == menu) {

@@ -1,6 +1,7 @@
 #include "controls.h"
 
-enum { DEBOUNCE_MS = 25, MODE_HOLD_MS = 600, DEVICE_HOLD_MS = 3000, VIDEO_WHEEL_STEPS = 3 };
+enum { DEBOUNCE_MS = 25, MODE_HOLD_MS = 600, MODE_MENU_HOLD_MS = 1650,
+       DEVICE_HOLD_MS = 3000, VIDEO_WHEEL_STEPS = 3 };
 
 page_action_t page_buttons_poll(page_buttons_t *buttons, uint8_t raw, uint32_t now)
 {
@@ -18,29 +19,30 @@ page_action_t page_buttons_poll(page_buttons_t *buttons, uint8_t raw, uint32_t n
             buttons->gesture |= raw;
         } else {
             uint8_t gesture = buttons->gesture;
-            bool open_modes = buttons->mode_pending && !buttons->devices_fired;
+            page_action_t chord = buttons->pending_chord;
             buttons->gesture = 0;
-            buttons->mode_pending = false;
-            buttons->devices_fired = false;
+            buttons->pending_chord = PAGE_NONE;
             if (gesture == KEY_FRONT) {
                 return PAGE_NEXT;
             }
             if (gesture == KEY_SIDE) {
                 return PAGE_PREV;
             }
-            if (open_modes) {
-                return PAGE_MODE_GESTURE;
+            if (chord != PAGE_DEVICE_GESTURE) {
+                return chord;
             }
         }
     }
-    if (buttons->stable == KEYS_BOTH && raw == KEYS_BOTH && !buttons->devices_fired) {
+    if (buttons->stable == KEYS_BOTH && raw == KEYS_BOTH && buttons->pending_chord != PAGE_DEVICE_GESTURE) {
         uint32_t held = now - buttons->chord_at;
         if (held >= DEVICE_HOLD_MS) {
-            buttons->devices_fired = true;
+            buttons->pending_chord = PAGE_DEVICE_GESTURE;
             return PAGE_DEVICE_GESTURE;
         }
-        if (held >= MODE_HOLD_MS) {
-            buttons->mode_pending = true;
+        if (held >= MODE_MENU_HOLD_MS) {
+            buttons->pending_chord = PAGE_MODE_MENU_GESTURE;
+        } else if (held >= MODE_HOLD_MS && buttons->pending_chord == PAGE_NONE) {
+            buttons->pending_chord = PAGE_MODE_GESTURE;
         }
     }
     return PAGE_NONE;
@@ -74,6 +76,15 @@ page_report_t page_report_for(page_profile_t profile, bool invert, page_action_t
         return (page_report_t){ REPORT_KEYBOARD, REPORT_KEYBOARD_SIZE,
                                 { 0, 0, keyboard[profile][next ? 0 : 1] } };
     }
+    }
+}
+
+page_profile_t page_iphone_next_profile(page_profile_t profile)
+{
+    switch (profile) {
+    case PROFILE_IPHONE_VERTICAL: return PROFILE_IPHONE_SCROLL;
+    case PROFILE_IPHONE_SCROLL: return PROFILE_IPHONE_HORIZONTAL;
+    default: return PROFILE_IPHONE_VERTICAL;
     }
 }
 

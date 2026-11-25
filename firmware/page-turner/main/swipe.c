@@ -7,11 +7,12 @@ enum {
     // Portrait starting offsets in relative mouse counts, inward from
     // a clamped corner. Keep the button up until the pointer is inside the app.
     AIM_VERTICAL_X = 145, AIM_VERTICAL_Y = 210, AIM_HORIZONTAL_X = 95, AIM_HORIZONTAL_Y = 285,
+    AIM_READING_X = 40, AIM_READING_Y = 165,
     DRAG_VERTICAL = 380, DRAG_HORIZONTAL = 190,
 };
 
-// A short drag with a tapered tail to reduce coasting after button release.
-static const int8_t reading_deltas[] = {11, 13, 14, 14, 14, 13, 12, 10, 8, 6, 3, 2};
+// Slow the drag before release to reduce coasting.
+static const int8_t reading_deltas[] = {20, 26, 30, 31, 31, 31, 29, 26, 18, 10, 6, 2};
 
 enum { READING_STEPS = sizeof(reading_deltas) / sizeof(reading_deltas[0]) };
 
@@ -49,6 +50,11 @@ bool page_swipe_frame(page_swipe_direction_t direction, unsigned step, uint8_t *
     if (step < HOME_STEPS) {
         x = -x_sign * HOME_DELTA;
         y = -y_sign * HOME_DELTA;
+        *delay_ms = MOVE_MS;
+    } else if (reading && step < HOME_STEPS + AIM_STEPS) {
+        // Aim in the left gutter before pressing to avoid timeline media carousels.
+        x = AIM_READING_X / AIM_STEPS;
+        y = y_sign * AIM_READING_Y / AIM_STEPS;
         *delay_ms = MOVE_MS;
     } else if (step < HOME_STEPS + AIM_STEPS) {
         x = x_sign * (vertical ? AIM_VERTICAL_X : AIM_HORIZONTAL_X) / AIM_STEPS;
