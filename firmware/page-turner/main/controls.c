@@ -57,6 +57,7 @@ page_report_t page_report_for(page_profile_t profile, bool invert, page_action_t
         return (page_report_t){ REPORT_CONSUMER, REPORT_CONSUMER_SIZE, { next ? 2 : 1 } };
     case PROFILE_IPHONE_VERTICAL:
     case PROFILE_IPHONE_HORIZONTAL:
+    case PROFILE_IPHONE_SCROLL:
         // These profiles require a pointer gesture, not a single report.
         return (page_report_t){0};
     case PROFILE_VIDEO_WHEEL: {
@@ -85,8 +86,9 @@ const char *page_profile_name(page_profile_t profile)
         [PROFILE_VIDEO_KEYS] = "Video PC Keys",
         [PROFILE_VIDEO_WHEEL] = "Mouse Wheel",
         [PROFILE_MANGA_SCROLL] = "Manga Scroll",
-        [PROFILE_IPHONE_VERTICAL] = "iPhone Vertical",
+        [PROFILE_IPHONE_VERTICAL] = "iPhone Shorts",
         [PROFILE_IPHONE_HORIZONTAL] = "iPhone Horizontal",
+        [PROFILE_IPHONE_SCROLL] = "iPhone Reading",
     };
     return (unsigned)profile < PROFILE_COUNT ? names[profile] : "?";
 }
