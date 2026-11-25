@@ -15,7 +15,9 @@ typedef enum {
     PROFILE_COUNT
 } page_profile_t;
 
-typedef enum { PAGE_NONE, PAGE_NEXT, PAGE_PREV, PAGE_MODE_GESTURE, PAGE_DEVICE_GESTURE } page_action_t;
+typedef enum {
+    PAGE_NONE, PAGE_NEXT, PAGE_PREV, PAGE_MODE_GESTURE, PAGE_DEVICE_GESTURE, PAGE_MODE_MENU_GESTURE,
+} page_action_t;
 typedef enum { KEY_FRONT = 1, KEY_SIDE = 2, KEYS_BOTH = 3 } page_keys_t;
 
 typedef enum {
@@ -31,8 +33,7 @@ typedef struct {
     uint8_t gesture;
     uint32_t changed_at;
     uint32_t chord_at;
-    bool mode_pending;
-    bool devices_fired;
+    page_action_t pending_chord;
 } page_buttons_t;
 
 typedef struct {
@@ -45,6 +46,7 @@ page_action_t page_buttons_poll(page_buttons_t *buttons, uint8_t raw, uint32_t n
 page_report_t page_report_for(page_profile_t profile, bool invert, page_action_t action);
 page_swipe_direction_t page_swipe_for(page_profile_t profile, bool invert, page_action_t action);
 bool page_swipe_frame(page_swipe_direction_t direction, unsigned step, uint8_t *bytes, uint8_t *delay_ms);
+page_profile_t page_iphone_next_profile(page_profile_t profile);
 const char *page_profile_name(page_profile_t profile);
 
 #ifdef __cplusplus

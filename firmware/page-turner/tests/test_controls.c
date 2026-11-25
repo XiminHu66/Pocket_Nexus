@@ -76,6 +76,32 @@ static void test_mode_chord(void)
     assert(page_buttons_poll(&buttons, 0, 1125) == PAGE_PREV);
 }
 
+static void test_iphone_mode_shortcuts(void)
+{
+    page_buttons_t buttons = {0};
+    assert(page_buttons_poll(&buttons, KEYS_BOTH, 100) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEYS_BOTH, 125) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEYS_BOTH, 1125) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, 0, 1130) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, 0, 1155) == PAGE_MODE_GESTURE);
+    assert(page_buttons_poll(&buttons, 0, 1180) == PAGE_NONE);
+
+    assert(page_buttons_poll(&buttons, KEYS_BOTH, 2000) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEYS_BOTH, 2025) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEYS_BOTH, 2625) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEYS_BOTH, 4025) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEY_FRONT, 4030) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, KEY_FRONT, 4055) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, 0, 4060) == PAGE_NONE);
+    assert(page_buttons_poll(&buttons, 0, 4085) == PAGE_MODE_MENU_GESTURE);
+    assert(page_buttons_poll(&buttons, 0, 4110) == PAGE_NONE);
+
+    assert(page_iphone_next_profile(PROFILE_PPT) == PROFILE_IPHONE_VERTICAL);
+    assert(page_iphone_next_profile(PROFILE_IPHONE_VERTICAL) == PROFILE_IPHONE_SCROLL);
+    assert(page_iphone_next_profile(PROFILE_IPHONE_SCROLL) == PROFILE_IPHONE_HORIZONTAL);
+    assert(page_iphone_next_profile(PROFILE_IPHONE_HORIZONTAL) == PROFILE_IPHONE_VERTICAL);
+}
+
 static void test_reports(void)
 {
     static const struct {
@@ -106,6 +132,7 @@ static void test_reports(void)
     assert(page_report_for(PROFILE_BOOX, false, PAGE_NONE).id == 0);
     assert(page_report_for(PROFILE_PPT, false, PAGE_MODE_GESTURE).id == 0);
     assert(page_report_for(PROFILE_BOOX, false, PAGE_DEVICE_GESTURE).id == 0);
+    assert(page_report_for(PROFILE_IPHONE_SCROLL, false, PAGE_MODE_MENU_GESTURE).id == 0);
     assert(page_report_for(PROFILE_COUNT, false, PAGE_NEXT).id == 0);
 }
 
@@ -177,30 +204,40 @@ static void test_iphone_reading_scroll(void)
             unsigned step = 0, motion_frames = 0, drag = 0;
             unsigned last_delta = 0;
             bool pressed = false;
+            // Model clamping to the portrait screen edges before moving into the gutter.
+            int cursor_x = 280, cursor_y = 400;
             uint8_t frame[REPORT_MOUSE_SIZE], delay;
             while (page_swipe_frame(dir, step, frame, &delay)) {
                 assert(++step < 50 && frame[0] <= 1 && frame[3] == 0);
+                int dy = (int8_t)frame[2];
+                cursor_x += (int8_t)frame[1];
+                cursor_y += dy;
+                if (cursor_x < 0) cursor_x = 0;
+                if (cursor_y < 0) cursor_y = 0;
+                if (cursor_x > 375) cursor_x = 375;
+                if (cursor_y > 667) cursor_y = 667;
                 if (frame[0] == 0) {
                     assert(!pressed);
                     continue;
                 }
-                int dy = (int8_t)frame[2];
+                assert(cursor_x == 40);
                 assert(frame[1] == 0);
                 if (!pressed) {
                     assert(dy == 0 && delay == 32);
+                    assert(cursor_y == (next ? 502 : 165));
                     pressed = true;
                     continue;
                 }
                 int delta = next ? -dy : dy;
-                assert(delta > 0 && delta <= 14);
-                if (++motion_frames > 5) {
+                assert(delta > 0 && delta <= 31);
+                if (++motion_frames > 6) {
                     assert((unsigned)delta < last_delta);
                 }
                 last_delta = (unsigned)delta;
                 drag += last_delta;
                 assert(delay == (motion_frames == 12 ? 54 : 18));
             }
-            assert(step == 38 && motion_frames == 12 && drag == 120 && last_delta == 2);
+            assert(step == 38 && motion_frames == 12 && drag == 260 && last_delta == 2);
         }
     }
 }
@@ -211,6 +248,7 @@ int main(void)
     test_hold_and_clock_wrap();
     test_device_chord();
     test_mode_chord();
+    test_iphone_mode_shortcuts();
     test_reports();
     test_iphone_swipe_frames();
     test_iphone_reading_scroll();
