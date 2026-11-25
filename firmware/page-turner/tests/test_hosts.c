@@ -94,6 +94,14 @@ static void test_iphone_profile_upgrade(void)
     assert(page_host_can_send(&book, 2, &phone, true, true));
     assert(!page_hosts_migrate_iphone(&book));
     assert(page_hosts_valid(&book));
+
+    book.hosts[2].settings = PROFILE_IPHONE_SCROLL | PAGE_SETTINGS_INVERT;
+    assert(page_hosts_valid(&book));
+    assert(!page_hosts_migrate_iphone(&book));
+    page_host_connected(&book, 2);
+    page_host_connected(&book, 0);
+    assert(book.hosts[2].settings == (PROFILE_IPHONE_SCROLL | PAGE_SETTINGS_INVERT));
+    assert(book.hosts[0].settings == PROFILE_MANGA && book.hosts[1].settings == PROFILE_BOOX);
 }
 
 int main(void)

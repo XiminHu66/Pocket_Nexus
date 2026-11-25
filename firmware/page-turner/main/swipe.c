@@ -3,11 +3,17 @@
 enum {
     HOME_STEPS = 20, HOME_DELTA = 120, AIM_STEPS = 5, DRAG_STEPS = 10,
     MOVE_MS = 12, DOWN_MS = 32, DRAG_MS = 15,
+    READING_DRAG_MS = 18, READING_SETTLE_MS = 54,
     // Portrait starting offsets in relative mouse counts, inward from
     // a clamped corner. Keep the button up until the pointer is inside the app.
     AIM_VERTICAL_X = 145, AIM_VERTICAL_Y = 210, AIM_HORIZONTAL_X = 95, AIM_HORIZONTAL_Y = 285,
     DRAG_VERTICAL = 380, DRAG_HORIZONTAL = 190,
 };
+
+// A short drag with a tapered tail to reduce coasting after button release.
+static const int8_t reading_deltas[] = {11, 13, 14, 14, 14, 13, 12, 10, 8, 6, 3, 2};
+
+enum { READING_STEPS = sizeof(reading_deltas) / sizeof(reading_deltas[0]) };
 
 page_swipe_direction_t page_swipe_for(page_profile_t profile, bool invert, page_action_t action)
 {
@@ -21,18 +27,22 @@ page_swipe_direction_t page_swipe_for(page_profile_t profile, bool invert, page_
     if (profile == PROFILE_IPHONE_HORIZONTAL) {
         return next ? SWIPE_LEFT : SWIPE_RIGHT;
     }
+    if (profile == PROFILE_IPHONE_SCROLL) {
+        return next ? SWIPE_SCROLL_UP : SWIPE_SCROLL_DOWN;
+    }
     return SWIPE_NONE;
 }
 
 bool page_swipe_frame(page_swipe_direction_t direction, unsigned step, uint8_t *bytes, uint8_t *delay_ms)
 {
-    if (direction <= SWIPE_NONE || direction > SWIPE_RIGHT) {
+    if (direction <= SWIPE_NONE || direction > SWIPE_SCROLL_DOWN) {
         return false;
     }
 
-    bool vertical = direction == SWIPE_UP || direction == SWIPE_DOWN;
+    bool reading = direction == SWIPE_SCROLL_UP || direction == SWIPE_SCROLL_DOWN;
+    bool vertical = reading || direction == SWIPE_UP || direction == SWIPE_DOWN;
     int x_sign = direction == SWIPE_LEFT ? -1 : 1;
-    int y_sign = direction == SWIPE_UP ? -1 : 1;
+    int y_sign = direction == SWIPE_UP || direction == SWIPE_SCROLL_UP ? -1 : 1;
     int x = 0, y = 0;
     uint8_t buttons = 0;
 
@@ -47,7 +57,12 @@ bool page_swipe_frame(page_swipe_direction_t direction, unsigned step, uint8_t *
     } else if (step == HOME_STEPS + AIM_STEPS) {
         buttons = 1;
         *delay_ms = DOWN_MS;
-    } else if (step <= HOME_STEPS + AIM_STEPS + DRAG_STEPS) {
+    } else if (reading && step <= HOME_STEPS + AIM_STEPS + READING_STEPS) {
+        unsigned drag_step = step - HOME_STEPS - AIM_STEPS - 1;
+        buttons = 1;
+        y = y_sign * reading_deltas[drag_step];
+        *delay_ms = drag_step + 1 == READING_STEPS ? READING_SETTLE_MS : READING_DRAG_MS;
+    } else if (!reading && step <= HOME_STEPS + AIM_STEPS + DRAG_STEPS) {
         buttons = 1;
         x = vertical ? 0 : x_sign * DRAG_HORIZONTAL / DRAG_STEPS;
         y = vertical ? y_sign * DRAG_VERTICAL / DRAG_STEPS : 0;

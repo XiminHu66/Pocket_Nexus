@@ -158,11 +158,49 @@ static void test_iphone_swipe_frames(void)
         assert(step == 36 && pressed == 11 && elapsed < 550);
         assert(x_at_down > 70 && x_at_down < 305 && y_at_down > 150 && y_at_down < 520);
         switch (dir) {
-        case SWIPE_UP: assert(drag_x == 0 && drag_y < -300 && y < y_at_down); break;
-        case SWIPE_DOWN: assert(drag_x == 0 && drag_y > 300 && y > y_at_down); break;
-        case SWIPE_LEFT: assert(drag_y == 0 && drag_x < -150 && x < x_at_down); break;
-        case SWIPE_RIGHT: assert(drag_y == 0 && drag_x > 150 && x > x_at_down); break;
+        case SWIPE_UP: assert(drag_x == 0 && drag_y == -380 && y < y_at_down); break;
+        case SWIPE_DOWN: assert(drag_x == 0 && drag_y == 380 && y > y_at_down); break;
+        case SWIPE_LEFT: assert(drag_y == 0 && drag_x == -190 && x < x_at_down); break;
+        case SWIPE_RIGHT: assert(drag_y == 0 && drag_x == 190 && x > x_at_down); break;
         default: assert(false);
+        }
+    }
+}
+
+static void test_iphone_reading_scroll(void)
+{
+    for (unsigned inverted = 0; inverted <= 1; ++inverted) {
+        for (page_action_t action = PAGE_NEXT; action <= PAGE_PREV; ++action) {
+            bool next = (action == PAGE_NEXT) != inverted;
+            page_swipe_direction_t dir = page_swipe_for(PROFILE_IPHONE_SCROLL, inverted, action);
+            assert(dir == (next ? SWIPE_SCROLL_UP : SWIPE_SCROLL_DOWN));
+            unsigned step = 0, motion_frames = 0, drag = 0;
+            unsigned last_delta = 0;
+            bool pressed = false;
+            uint8_t frame[REPORT_MOUSE_SIZE], delay;
+            while (page_swipe_frame(dir, step, frame, &delay)) {
+                assert(++step < 50 && frame[0] <= 1 && frame[3] == 0);
+                if (frame[0] == 0) {
+                    assert(!pressed);
+                    continue;
+                }
+                int dy = (int8_t)frame[2];
+                assert(frame[1] == 0);
+                if (!pressed) {
+                    assert(dy == 0 && delay == 32);
+                    pressed = true;
+                    continue;
+                }
+                int delta = next ? -dy : dy;
+                assert(delta > 0 && delta <= 14);
+                if (++motion_frames > 5) {
+                    assert((unsigned)delta < last_delta);
+                }
+                last_delta = (unsigned)delta;
+                drag += last_delta;
+                assert(delay == (motion_frames == 12 ? 54 : 18));
+            }
+            assert(step == 38 && motion_frames == 12 && drag == 120 && last_delta == 2);
         }
     }
 }
@@ -175,6 +213,7 @@ int main(void)
     test_mode_chord();
     test_reports();
     test_iphone_swipe_frames();
-    puts("PASS: 200 simulated taps, debounce, hold, mode / device chords, timer wrap, HID mappings and iPhone swipe frames");
+    test_iphone_reading_scroll();
+    puts("PASS: 200 simulated taps, debounce, hold, mode / device chords, timer wrap, HID mappings and iPhone Shorts, horizontal and reading swipe frames");
     return 0;
 }

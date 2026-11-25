@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 
 #include "M5Unified.h"
 #include "driver/gpio.h"
@@ -23,28 +24,33 @@ enum class Menu { None, Mode, Variant, Devices, Manage, HostActions, Label, Forg
 constexpr uint8_t add_item = PAGE_HOST_COUNT;
 constexpr uint8_t manage_item = PAGE_HOST_COUNT + 1;
 
+struct Variant {
+    page_profile_t profile;
+    const char *label;
+};
+
 struct Mode {
     const char *title;
-    page_profile_t primary;
-    page_profile_t alternate;
-    const char *primary_label;
-    const char *alternate_label;
+    std::initializer_list<Variant> variants;
 };
 
 constexpr Mode modes[] = {
-    {"BOOX", PROFILE_BOOX, PROFILE_COUNT, "", ""},
-    {"PPT", PROFILE_PPT, PROFILE_COUNT, "", ""},
-    {"MANGA", PROFILE_MANGA, PROFILE_MANGA_SCROLL, "Page arrows", "Page Up / Down"},
-    {"VIDEO", PROFILE_VIDEO_KEYS, PROFILE_VIDEO_WHEEL, "PC arrow keys", "Mouse wheel"},
-    {"IPHONE", PROFILE_IPHONE_VERTICAL, PROFILE_IPHONE_HORIZONTAL, "Vertical swipe", "Horizontal swipe"},
+    {"BOOX", {{PROFILE_BOOX, ""}}},
+    {"PPT", {{PROFILE_PPT, ""}}},
+    {"MANGA", {{PROFILE_MANGA, "Page arrows"}, {PROFILE_MANGA_SCROLL, "Page Up / Down"}}},
+    {"VIDEO", {{PROFILE_VIDEO_KEYS, "PC arrow keys"}, {PROFILE_VIDEO_WHEEL, "Mouse wheel"}}},
+    {"IPHONE", {{PROFILE_IPHONE_VERTICAL, "Shorts swipe"}, {PROFILE_IPHONE_HORIZONTAL, "Horizontal swipe"},
+                {PROFILE_IPHONE_SCROLL, "Reading scroll"}}},
 };
 constexpr unsigned mode_count = sizeof(modes) / sizeof(modes[0]);
 
 unsigned mode_index(page_profile_t active)
 {
     for (unsigned i = 0; i < mode_count; ++i) {
-        if (modes[i].primary == active || modes[i].alternate == active) {
-            return i;
+        for (const Variant &variant : modes[i].variants) {
+            if (variant.profile == active) {
+                return i;
+            }
         }
     }
     return 1;
@@ -57,7 +63,7 @@ bool display_on;
 bool usb_ready;
 Menu menu = Menu::None;
 unsigned selected_mode;
-bool use_alternate;
+unsigned selected_variant;
 uint8_t host_choice;
 uint8_t managed_host;
 bool forget_action;
@@ -233,9 +239,11 @@ void show(page_ble_status_t status, uint32_t now)
             render_choice(i, i == selected_mode, modes[i].title);
         }
     } else if (menu == Menu::Variant) {
-        const Mode &mode = modes[selected_mode];
-        render_choice(0, !use_alternate, mode.primary_label);
-        render_choice(1, use_alternate, mode.alternate_label);
+        unsigned row = 0;
+        for (const Variant &variant : modes[selected_mode].variants) {
+            render_choice(row, row == selected_variant, variant.label);
+            ++row;
+        }
     } else if (menu == Menu::None) {
         if (status.state == BLE_PAIRING) {
             display.drawString("Open host Bluetooth", 8, 104);
@@ -372,22 +380,28 @@ void handle_menu_button(page_action_t action, const page_ble_status_t &status, u
         if (front) {
             selected_mode = (selected_mode + 1) % mode_count;
         } else {
-            const Mode &mode = modes[selected_mode];
-            if (mode.alternate == PROFILE_COUNT) {
-                choose_mode(mode.primary);
+            const auto &variants = modes[selected_mode].variants;
+            if (variants.size() == 1) {
+                choose_mode(variants.begin()->profile);
             } else {
-                use_alternate = profile == mode.alternate;
+                selected_variant = 0;
+                for (unsigned i = 0; i < variants.size(); ++i) {
+                    if (variants.begin()[i].profile == profile) {
+                        selected_variant = i;
+                        break;
+                    }
+                }
                 menu = Menu::Variant;
             }
         }
         break;
     }
     case Menu::Variant: {
+        const auto &variants = modes[selected_mode].variants;
         if (front) {
-            use_alternate = !use_alternate;
+            selected_variant = (selected_variant + 1) % variants.size();
         } else {
-            const Mode &mode = modes[selected_mode];
-            choose_mode(use_alternate ? mode.alternate : mode.primary);
+            choose_mode(variants.begin()[selected_variant].profile);
         }
         break;
     }
@@ -399,7 +413,7 @@ void handle_menu_button(page_action_t action, const page_ble_status_t &status, u
 bool handle_command(const char *line)
 {
     if (std::strcmp(line, "help") == 0) {
-        std::puts("status | mode boox/ppt/manga/manga-scroll/video-pc/video-phone/iphone-vertical/iphone-horizontal | invert on/off");
+        std::puts("status | mode boox/ppt/manga/manga-scroll/video-pc/video-phone/iphone-vertical/iphone-horizontal/iphone-scroll | invert on/off");
         return false;
     }
     if (std::strcmp(line, "status") == 0) {
@@ -418,6 +432,7 @@ bool handle_command(const char *line)
         {"mode manga", PROFILE_MANGA}, {"mode manga-scroll", PROFILE_MANGA_SCROLL},
         {"mode video-pc", PROFILE_VIDEO_KEYS}, {"mode video-phone", PROFILE_VIDEO_WHEEL},
         {"mode iphone-vertical", PROFILE_IPHONE_VERTICAL}, {"mode iphone-horizontal", PROFILE_IPHONE_HORIZONTAL},
+        {"mode iphone-scroll", PROFILE_IPHONE_SCROLL},
         {"profile volume", PROFILE_BOOX}, {"profile page", PROFILE_PPT}, {"profile arrow", PROFILE_MANGA},
     };
     for (const auto &shortcut : shortcuts) {
